@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.plexus.personal.conversation.infrastructure.persistence.ConversationMapper">
+
+    <resultMap id="ConversationResultMap" type="com.plexus.personal.conversation.infrastructure.persistence.ConversationRow">
+        <id property="id" column="id" />
+        <result property="userId" column="user_id" />
+        <result property="title" column="title" />
+        <result property="createdAt" column="created_at" />
+        <result property="updatedAt" column="updated_at" />
+    </resultMap>
+
+    <select id="insert" resultType="long">
+        INSERT INTO conversations (user_id, title)
+        VALUES (#{userId}, #{title})
+        RETURNING id
+    </select>
+
+    <select id="findById" resultMap="ConversationResultMap">
+        SELECT id, user_id, title, created_at, updated_at
+        FROM conversations
+        WHERE id = #{conversationId}
+    </select>
+
+    <select id="findByUserId" resultMap="ConversationResultMap">
+        SELECT id, user_id, title, created_at, updated_at
+        FROM conversations
+        WHERE user_id = #{userId}
+        ORDER BY updated_at DESC, id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <update id="updateTitle">
+        UPDATE conversations
+        SET title = #{title}, updated_at = CURRENT_TIMESTAMP
+        WHERE id = #{conversationId}
+    </update>
+
+    <delete id="delete">
+        DELETE FROM conversations
+        WHERE id = #{conversationId}
+    </delete>
+</mapper>

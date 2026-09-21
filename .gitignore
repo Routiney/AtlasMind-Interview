@@ -1,0 +1,9 @@
+web/node_modules/
+web/dist/
+web/.env.development.local
+server-spring/target/
+core/__pycache__/
+core/run*.log
+server-spring/run*.log
+server/*.class
+tools/*.zip

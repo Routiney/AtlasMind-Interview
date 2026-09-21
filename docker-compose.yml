@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: plexus-personal-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: plexus_personal
+      POSTGRES_USER: plexus
+      POSTGRES_PASSWORD: plexus
+    ports:
+      - "5432:5432"
+    volumes:
+      - plexus_personal_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plexus -d plexus_personal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  plexus_personal_pgdata:

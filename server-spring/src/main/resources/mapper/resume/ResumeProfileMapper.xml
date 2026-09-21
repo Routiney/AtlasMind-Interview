@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.plexus.personal.resume.infrastructure.persistence.ResumeProfileMapper">
+    <resultMap id="ResumeProfileResultMap" type="com.plexus.personal.resume.infrastructure.persistence.ResumeProfileRow">
+        <id property="id" column="id" />
+        <result property="userId" column="user_id" />
+        <result property="name" column="name" />
+        <result property="targetRole" column="target_role" />
+        <result property="summary" column="summary" />
+        <result property="education" column="education" />
+        <result property="internship" column="internship" />
+        <result property="projects" column="projects" />
+        <result property="skills" column="skills" />
+        <result property="createdAt" column="created_at" />
+        <result property="updatedAt" column="updated_at" />
+    </resultMap>
+
+    <select id="findByUserId" resultMap="ResumeProfileResultMap">
+        SELECT id, user_id, name, target_role, summary, education, internship, projects, skills, created_at, updated_at
+        FROM resume_profiles
+        WHERE user_id = #{userId}
+    </select>
+
+    <update id="upsert">
+        INSERT INTO resume_profiles (user_id, name, target_role, summary, education, internship, projects, skills)
+        VALUES (#{userId}, #{name}, #{targetRole}, #{summary}, #{education}, #{internship}, #{projects}, #{skills})
+        ON CONFLICT (user_id) DO UPDATE SET
+            name = EXCLUDED.name,
+            target_role = EXCLUDED.target_role,
+            summary = EXCLUDED.summary,
+            education = EXCLUDED.education,
+            internship = EXCLUDED.internship,
+            projects = EXCLUDED.projects,
+            skills = EXCLUDED.skills,
+            updated_at = CURRENT_TIMESTAMP
+    </update>
+</mapper>
