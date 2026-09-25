@@ -45,6 +45,11 @@ public class ConversationService {
         return messageRepository.findByConversationId(conversationId, limit, offset);
     }
 
+    public List<Message> findMessagesAfter(Long userId, Long conversationId, long messageId, int limit) {
+        requireOwnedConversation(userId, conversationId);
+        return messageRepository.findAfterId(conversationId, messageId, limit);
+    }
+
     public Conversation resolveForChat(Long userId, Long conversationId, String title) {
         if (conversationId == null) {
             return create(userId, title);
@@ -59,7 +64,7 @@ public class ConversationService {
         return messageRepository.append(conversationId, role, content);
     }
 
-    private Conversation requireOwnedConversation(Long userId, Long conversationId) {
+    public Conversation requireOwnedConversation(Long userId, Long conversationId) {
         Conversation conversation = conversationRepository.findById(conversationId)
                 .orElseThrow(() -> new ConversationNotFoundException(conversationId));
         if (!conversation.userId().equals(userId)) {

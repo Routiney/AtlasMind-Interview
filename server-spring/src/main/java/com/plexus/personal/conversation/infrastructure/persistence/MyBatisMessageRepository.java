@@ -32,6 +32,13 @@ public class MyBatisMessageRepository implements MessageRepository {
                 .toList();
     }
 
+    @Override
+    public List<Message> findAfterId(Long conversationId, long messageId, int limit) {
+        return messageMapper.findAfterId(conversationId, messageId, limit).stream()
+                .map(this::toDomain)
+                .toList();
+    }
+
     private Message toDomain(MessageRow row) {
         return new Message(
                 row.getId(),

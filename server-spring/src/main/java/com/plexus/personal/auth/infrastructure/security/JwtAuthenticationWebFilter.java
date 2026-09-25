@@ -19,6 +19,8 @@ public class JwtAuthenticationWebFilter implements WebFilter {
 
     private static final String CURRENT_USER_PATH = "/api/auth/me";
     private static final String AGENT_EXECUTE_PATH = "/agents/PlexusAgent/execute";
+    private static final String AGENT_PLAN_PATH = "/agents/PlexusAgent/plan";
+    private static final String AGENT_PLANS_PATH = "/agents/PlexusAgent/plans";
     private static final String CONVERSATIONS_PATH = "/api/conversations";
     private static final String RESUME_PATH = "/api/resume";
 
@@ -55,6 +57,12 @@ public class JwtAuthenticationWebFilter implements WebFilter {
         return CURRENT_USER_PATH.equals(path)
                 || (AGENT_EXECUTE_PATH.equals(path)
                 && HttpMethod.POST.equals(exchange.getRequest().getMethod()))
+                || (AGENT_PLAN_PATH.equals(path)
+                && HttpMethod.POST.equals(exchange.getRequest().getMethod()))
+                || (path.equals(AGENT_PLANS_PATH)
+                && (HttpMethod.GET.equals(exchange.getRequest().getMethod()) || HttpMethod.POST.equals(exchange.getRequest().getMethod())))
+                || (path.startsWith(AGENT_PLANS_PATH + "/")
+                && HttpMethod.GET.equals(exchange.getRequest().getMethod()))
                 || path.equals(CONVERSATIONS_PATH)
                 || path.startsWith(CONVERSATIONS_PATH + "/")
                 || path.equals(RESUME_PATH);

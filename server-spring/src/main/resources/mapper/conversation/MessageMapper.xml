@@ -25,4 +25,12 @@
         ORDER BY created_at DESC, id DESC
         LIMIT #{limit} OFFSET #{offset}
     </select>
+
+    <select id="findAfterId" resultMap="MessageResultMap">
+        SELECT id, conversation_id, role, content, created_at
+        FROM messages
+        WHERE conversation_id = #{conversationId} AND id &gt; #{messageId}
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
 </mapper>

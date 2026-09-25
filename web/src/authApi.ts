@@ -10,6 +10,20 @@ export type Conversation = { id: number; title: string; createdAt: string; updat
 export type ConversationPage = { items: Conversation[]; page: number; size: number; hasNext: boolean }
 export type ConversationMessage = { id: number; role: 'USER' | 'ASSISTANT' | 'SYSTEM'; content: string; createdAt: string }
 export type MessagePage = { items: ConversationMessage[]; page: number; size: number; hasNext: boolean }
+export type PlanningTask = { task_id: string; title: string; intent: string }
+export type PlanningTaskSummary = { task_id: string; title: string; agent_name?: string; findings: string[]; evidence: string[]; gaps: string[]; implications: string[]; confidence: 'high' | 'medium' | 'low' }
+export type PlanningAssessmentItem = { area: string; conclusion: string; evidence: string[]; confidence: 'high' | 'medium' | 'low' }
+export type PlanningRoleRecommendation = { role: string; reason: string; strengths: string[]; gaps: string[] }
+export type PlanningResult = {
+  plan_id?: number
+  research_plan: { objective: string; tasks: PlanningTask[] }
+  task_summaries: PlanningTaskSummary[]
+  assessment: { overall_assessment: string; strengths: PlanningAssessmentItem[]; gaps: PlanningAssessmentItem[]; role_recommendations: PlanningRoleRecommendation[]; evidence_limits: string[]; next_actions: string[] }
+  learning_plan: { target_role: string; duration_weeks: number; hours_per_week: number; rationale: string; phases: { phase: string; objective: string; tasks: string[]; deliverables: string[]; estimated_hours: number }[]; interview_focus: string[]; adjustment_rules: string[] }
+  interview_focus: string[]
+  evidence_limits: string[]
+}
+export type PlanningHistoryItem = { id: number; targetRole: string; jobDescription: string; weeks: number; hoursPerWeek: number; researchMarket: boolean; createdAt: string; updatedAt: string }
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
   return requestJson<LoginResponse>('/api/auth/login', { method: 'POST', body: { username, password } })
@@ -53,4 +67,31 @@ export async function deleteConversation(accessToken: string, conversationId: nu
 
 export async function getConversationMessages(accessToken: string, conversationId: number, page = 0, size = 30, signal?: AbortSignal): Promise<MessagePage> {
   return requestJson<MessagePage>(`/api/conversations/${conversationId}/messages?page=${page}&size=${size}`, { token: accessToken, signal })
+}
+
+export async function clearConversationMemory(accessToken: string, conversationId: number): Promise<void> {
+  await requestJson<void>(`/api/conversations/${conversationId}/memory`, { method: 'DELETE', token: accessToken })
+}
+
+export async function generatePlanningResult(accessToken: string, input: { requestId: string; jobDescription: string; weeks: number; hoursPerWeek: number; researchMarket: boolean }, signal?: AbortSignal): Promise<PlanningResult> {
+  return requestJson<PlanningResult>('/api/agents/PlexusAgent/plan', {
+    method: 'POST',
+    token: accessToken,
+    signal,
+    body: {
+      request_id: input.requestId,
+      job_description: input.jobDescription,
+      weeks: input.weeks,
+      hours_per_week: input.hoursPerWeek,
+      research_market: input.researchMarket,
+    },
+  })
+}
+
+export async function getPlanningHistory(accessToken: string, signal?: AbortSignal): Promise<PlanningHistoryItem[]> {
+  return requestJson<PlanningHistoryItem[]>('/api/agents/PlexusAgent/plans', { token: accessToken, signal })
+}
+
+export async function getPlanningResult(accessToken: string, planId: number, signal?: AbortSignal): Promise<PlanningResult> {
+  return requestJson<PlanningResult>(`/api/agents/PlexusAgent/plans/${planId}`, { token: accessToken, signal })
 }

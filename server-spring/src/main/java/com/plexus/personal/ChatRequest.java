@@ -8,9 +8,8 @@ public record ChatRequest(
         String query,
         @JsonProperty("session_id") String sessionId,
         @JsonProperty("conversation_id") Long conversationId,
+        @JsonProperty("include_resume") boolean includeResume,
+        @JsonProperty("deep_thinking") boolean deepThinking,
         boolean stream
 ) {
-    public ChatRequest withConversationId(Long id) {
-        return new ChatRequest(query, sessionId, id, stream);
-    }
 }

@@ -10,4 +10,6 @@ public interface MessageRepository {
     Message append(Long conversationId, MessageRole role, String content);
 
     List<Message> findByConversationId(Long conversationId, int limit, int offset);
+
+    List<Message> findAfterId(Long conversationId, long messageId, int limit);
 }

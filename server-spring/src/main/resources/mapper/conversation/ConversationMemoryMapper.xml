@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.plexus.personal.conversation.infrastructure.persistence.ConversationMemoryMapper">
+    <resultMap id="ConversationMemoryResultMap" type="com.plexus.personal.conversation.infrastructure.persistence.ConversationMemoryRow">
+        <id property="conversationId" column="conversation_id" />
+        <result property="summary" column="summary" />
+        <result property="factsJson" column="facts_json" />
+        <result property="version" column="version" />
+        <result property="forgottenBefore" column="forgotten_before" />
+        <result property="coveredUntilMessageId" column="covered_until_message_id" />
+        <result property="updatedAt" column="updated_at" />
+    </resultMap>
+
+    <select id="findByConversationId" resultMap="ConversationMemoryResultMap">
+        SELECT conversation_id, summary, facts_json::text AS facts_json, version, forgotten_before,
+               covered_until_message_id, updated_at
+        FROM conversation_memories
+        WHERE conversation_id = #{conversationId}
+    </select>
+
+    <insert id="ensure">
+        INSERT INTO conversation_memories (conversation_id) VALUES (#{conversationId})
+        ON CONFLICT DO NOTHING
+    </insert>
+    <update id="update">
+        UPDATE conversation_memories SET summary = #{summary}, facts_json = CAST(#{factsJson} AS jsonb),
+            covered_until_message_id = #{coveredUntilMessageId}, version = version + 1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE conversation_id = #{conversationId} AND version = #{version}
+    </update>
+    <update id="clear">
+        UPDATE conversation_memories SET summary = '', facts_json = '[]'::jsonb,
+            version = version + 1, updated_at = CURRENT_TIMESTAMP,
+            forgotten_before = COALESCE((SELECT MAX(id) FROM messages WHERE conversation_id = #{conversationId}), 0),
+            covered_until_message_id = COALESCE((SELECT MAX(id) FROM messages WHERE conversation_id = #{conversationId}), 0)
+        WHERE conversation_id = #{conversationId}
+    </update>
+</mapper>

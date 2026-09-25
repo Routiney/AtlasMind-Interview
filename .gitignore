@@ -3,6 +3,7 @@ web/dist/
 web/.env.development.local
 server-spring/target/
 core/__pycache__/
+core/.env
 core/run*.log
 server-spring/run*.log
 server/*.class

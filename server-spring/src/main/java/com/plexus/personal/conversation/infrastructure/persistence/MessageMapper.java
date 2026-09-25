@@ -16,4 +16,6 @@ public interface MessageMapper {
     );
 
     List<MessageRow> findByConversationId(@Param("conversationId") Long conversationId, @Param("limit") int limit, @Param("offset") int offset);
+
+    List<MessageRow> findAfterId(@Param("conversationId") Long conversationId, @Param("messageId") long messageId, @Param("limit") int limit);
 }

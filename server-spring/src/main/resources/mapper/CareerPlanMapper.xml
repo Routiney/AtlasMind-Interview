@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.plexus.personal.CareerPlanMapper">
+    <resultMap id="CareerPlanResultMap" type="com.plexus.personal.CareerPlanRow">
+        <id property="id" column="id" />
+        <result property="userId" column="user_id" />
+        <result property="requestId" column="request_id" />
+        <result property="targetRole" column="target_role" />
+        <result property="jobDescription" column="job_description" />
+        <result property="weeks" column="weeks" />
+        <result property="hoursPerWeek" column="hours_per_week" />
+        <result property="researchMarket" column="research_market" />
+        <result property="resultJson" column="result_json" />
+        <result property="createdAt" column="created_at" />
+        <result property="updatedAt" column="updated_at" />
+    </resultMap>
+
+    <select id="insert" resultType="long">
+        INSERT INTO career_plans (user_id, request_id, target_role, job_description, weeks, hours_per_week, research_market, result_json)
+        VALUES (#{userId}, #{requestId}, #{targetRole}, #{jobDescription}, #{weeks}, #{hoursPerWeek}, #{researchMarket}, CAST(#{resultJson} AS jsonb))
+        RETURNING id
+    </select>
+
+    <select id="findByUserIdAndRequestId" resultMap="CareerPlanResultMap">
+        SELECT id, user_id, request_id, target_role, job_description, weeks, hours_per_week, research_market,
+               result_json::text AS result_json, created_at, updated_at
+        FROM career_plans
+        WHERE user_id = #{userId} AND request_id = #{requestId}
+    </select>
+
+    <select id="findByUserId" resultMap="CareerPlanResultMap">
+        SELECT id, user_id, request_id, target_role, job_description, weeks, hours_per_week, research_market,
+               result_json::text AS result_json, created_at, updated_at
+        FROM career_plans
+        WHERE user_id = #{userId}
+        ORDER BY updated_at DESC, id DESC
+    </select>
+
+    <select id="findByIdAndUserId" resultMap="CareerPlanResultMap">
+        SELECT id, user_id, request_id, target_role, job_description, weeks, hours_per_week, research_market,
+               result_json::text AS result_json, created_at, updated_at
+        FROM career_plans
+        WHERE id = #{planId} AND user_id = #{userId}
+    </select>
+</mapper>

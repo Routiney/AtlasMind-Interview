@@ -6,7 +6,9 @@
 
 这是 AtlasMind 个人知识与工作助手的课程练习项目，参考原 Plexus 的架构但使用独立品牌。第一节课只实现一条最小的直接聊天链路，用来理解 React、Spring Boot、Python Agent 和 SSE 之间的职责边界。
 
-当前 Python 服务是教学用的假 Agent，不调用真实大模型。后续 Agent 课程会把它替换成独立的 LangChain/LangGraph 服务；原 Plexus 的 `plexus-core` 只作为架构参照。
+当前 Python 服务已接入 LangChain `create_agent`，默认连接 DeepSeek 的 OpenAI 兼容接口，并通过现有 SSE 链路流式返回聊天 Agent 内容。职业规划页面另有一条 Planner -> Task Summarizer -> Report Writer 工作流，负责生成能力评估、岗位方向、学习计划和面试重点；工具能力已通过 MCP Server 标准化。请求进入模型前会经过轻量查询审查，聊天执行期间会把工具调用状态推送到前端。原 Plexus 的 `plexus-core` 只作为架构参照。简历上下文由 Spring 根据当前登录用户从数据库读取。
+
+真实模型启动配置和本课 Agent 单元记录见 [第 5 课 Agent 笔记](doc/05-agent-notes.md)。Tools 与 MCP 将继续沿本课后续单元展开。
 
 ## 第一课学到了什么
 
@@ -209,7 +211,7 @@ curl.exe -sS -N --max-time 6 `
 
 第一课已经完成服务边界、SSE 事件、React 状态、请求取消、架构图、时序图和 5 个核心用例的整理。下面这些内容属于后续课程，本 README 不把它们当作当前已完成能力：
 
-- 真实 LangChain/LangGraph Agent；
+- 完整的 Plan-and-Solve 多阶段 Agent；当前已经有第一版 Core 规划工作流，Spring/UI 编排和 Reviewer 仍待后续接入；
 - 登录、JWT 和 PostgreSQL；
 - 文件上传、向量检索和知识库；
 - WebSocket 协作空间和 Kafka 事件系统。

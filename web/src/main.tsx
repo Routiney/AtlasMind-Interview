@@ -1,16 +1,19 @@
 import { StrictMode, createContext, useContext, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Link, Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { clearAuthSession, loadAuthSession, saveAuthSession, type AuthSession } from './authStorage'
-import { createConversation as createConversationApi, deleteConversation, devLogin, getConversationMessages, getConversations, getCurrentUser, login as loginWithPassword, register as registerUser, updateConversationTitle, type Conversation as ApiConversation, type ConversationMessage, type CurrentUser } from './authApi'
+import { clearConversationMemory, createConversation as createConversationApi, deleteConversation, devLogin, getConversationMessages, getConversations, getCurrentUser, getResume, login as loginWithPassword, register as registerUser, updateConversationTitle, type Conversation as ApiConversation, type ConversationMessage, type CurrentUser } from './authApi'
 import './style.css'
 import { ResumePage } from './ResumePage'
+import { PlanningPage } from './PlanningPage'
 import { requestSse } from './apiClient'
 import { validateDisplayName, validatePassword, validateUsername } from './validation'
 
 type Phase = 'idle' | 'thinking' | 'streaming' | 'done' | 'cancelled' | 'error'
 type AuthStatus = 'checking' | 'authenticated' | 'anonymous' | 'unavailable'
-type StreamEvent = { content?: string; conversation_id?: number }
+type StreamEvent = { content?: string; text?: string; conversation_id?: number; message?: string; code?: string }
 type ChatMessage = Pick<ConversationMessage, 'id' | 'role' | 'content'>
 type ConversationSnapshot = { messages: ChatMessage[]; conversationId: number | null }
 type Conversation = ApiConversation & ConversationSnapshot
@@ -192,33 +195,146 @@ function ChatDemo({ initialState, loading = false, hasEarlierMessages = false, o
   const [query, setQuery] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>(initialState?.messages || [])
   const [phase, setPhase] = useState<Phase>(initialState?.messages.length ? 'done' : 'idle')
+  const [thinkingText, setThinkingText] = useState('准备回答')
   const [conversationId, setConversationId] = useState<number | null>(initialState?.conversationId || null)
+  const [resumeAttached, setResumeAttached] = useState(false)
+  const [resumeLoading, setResumeLoading] = useState(false)
+  const [resumeNotice, setResumeNotice] = useState('')
+  const [memoryNotice, setMemoryNotice] = useState('')
+  const [deepThinking, setDeepThinking] = useState(false)
+  const [feedback, setFeedback] = useState<Record<string, boolean>>({})
+  const [showScrollLatest, setShowScrollLatest] = useState(false)
   const abortControllerRef = useRef<AbortController | null>(null)
   const sendingRef = useRef(false)
+  const sessionIdRef = useRef(`web-${crypto.randomUUID()}`)
+  const streamContentRef = useRef('')
+  const streamFrameRef = useRef<number | null>(null)
+  const transcriptRef = useRef<HTMLDivElement | null>(null)
+  const shouldAutoScrollRef = useRef(true)
 
-  useEffect(() => () => abortControllerRef.current?.abort(), [])
+  useEffect(() => () => {
+    abortControllerRef.current?.abort()
+    if (streamFrameRef.current !== null) window.cancelAnimationFrame(streamFrameRef.current)
+  }, [])
   useEffect(() => {
+    if (phase === 'streaming' || phase === 'thinking') return
     onStateChange?.({ messages, conversationId })
-  }, [messages, conversationId])
+  }, [messages, conversationId, phase])
   useEffect(() => {
     if (!initialState) return
-    setMessages(initialState.messages)
-    setConversationId(initialState.conversationId)
-    setPhase(initialState.messages.length ? 'done' : 'idle')
-  }, [initialState?.messages, initialState?.conversationId])
+    if (initialState.conversationId !== conversationId) {
+      setMessages(initialState.messages)
+      setConversationId(initialState.conversationId)
+      setPhase(initialState.messages.length ? 'done' : 'idle')
+      return
+    }
+    if (phase !== 'streaming' && phase !== 'thinking' && messages.length === 0 && initialState.messages.length > 0) {
+      setMessages(initialState.messages)
+      setPhase('done')
+    }
+  }, [initialState?.conversationId, initialState?.messages.length])
 
-  async function send() {
-    const trimmedQuery = query.trim()
+  useEffect(() => {
+    if (!shouldAutoScrollRef.current) return
+    const frame = window.requestAnimationFrame(() => {
+      const transcript = transcriptRef.current
+      if (transcript) transcript.scrollTop = transcript.scrollHeight
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [messages, phase])
+
+  function scheduleStreamRender(messageId: string) {
+    if (streamFrameRef.current !== null) return
+    streamFrameRef.current = window.requestAnimationFrame(() => {
+      streamFrameRef.current = null
+      setMessages(current => current.map(message => message.id === messageId ? { ...message, content: streamContentRef.current } : message))
+    })
+  }
+
+  async function toggleResume() {
+    if (resumeLoading || !authSession) return
+    setResumeNotice('')
+    if (resumeAttached) {
+      setResumeAttached(false)
+      setResumeNotice('已移除简历上下文')
+      return
+    }
+    setResumeLoading(true)
+    try {
+      const profile = await getResume(authSession.accessToken)
+      if (!profile) {
+        setResumeNotice('还没有简历档案，请先在简历档案页面保存。')
+        return
+      }
+      setResumeAttached(true)
+      setResumeNotice(`已附带：${profile.targetRole}`)
+    } catch (error) {
+      setResumeNotice(error instanceof Error ? error.message : '无法读取简历档案')
+    } finally {
+      setResumeLoading(false)
+    }
+  }
+
+  async function clearMemory() {
+    if (!authSession || !conversationId || loading || sendingRef.current || !window.confirm('清除后不会删除聊天记录，但后续回答不再使用这段会话记忆。确定继续吗？')) return
+    try {
+      await clearConversationMemory(authSession.accessToken, conversationId)
+      setMemoryNotice('会话记忆已清除')
+    } catch (error) {
+      setMemoryNotice(error instanceof Error ? error.message : '无法清除会话记忆')
+    }
+  }
+
+  function handleTranscriptScroll() {
+    const transcript = transcriptRef.current
+    if (!transcript) return
+    const atBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 80
+    shouldAutoScrollRef.current = atBottom
+    setShowScrollLatest(!atBottom)
+  }
+
+  function scrollToLatest() {
+    const transcript = transcriptRef.current
+    if (!transcript) return
+    shouldAutoScrollRef.current = true
+    setShowScrollLatest(false)
+    transcript.scrollTo({ top: transcript.scrollHeight, behavior: 'smooth' })
+  }
+
+  function loadEarlierMessages() {
+    const transcript = transcriptRef.current
+    const previousHeight = transcript?.scrollHeight || 0
+    const previousTop = transcript?.scrollTop || 0
+    onLoadEarlier?.()
+    if (!transcript) return
+    const restorePosition = () => {
+      transcript.scrollTop = previousTop + transcript.scrollHeight - previousHeight
+    }
+    const observer = new MutationObserver(restorePosition)
+    observer.observe(transcript, { childList: true, subtree: true })
+    window.setTimeout(() => {
+      restorePosition()
+      observer.disconnect()
+    }, 1000)
+  }
+
+  async function send(prompt?: string) {
+    const trimmedQuery = (prompt ?? query).trim()
     if (sendingRef.current || !trimmedQuery || !authSession || authStatus !== 'authenticated' || phase === 'streaming' || phase === 'thinking') return
     sendingRef.current = true
     const controller = new AbortController()
     abortControllerRef.current = controller
     const assistantMessageId = `pending-${Date.now()}`
+    streamContentRef.current = ''
+    shouldAutoScrollRef.current = true
+    setShowScrollLatest(false)
+    setQuery('')
     setMessages(current => [...current, { id: `user-${assistantMessageId}`, role: 'USER', content: trimmedQuery }, { id: assistantMessageId, role: 'ASSISTANT', content: '' }])
     onTitleChange?.(trimmedQuery.slice(0, 28))
+    setThinkingText('正在检查问题')
     setPhase('streaming')
     try {
-      const response = await requestSse('/api/agents/PlexusAgent/execute', { token: authSession.accessToken, signal: controller.signal, body: { query: trimmedQuery, session_id: 'web-demo', conversation_id: conversationId ?? undefined, stream: true } })
+      const response = await requestSse('/api/agents/PlexusAgent/execute', { token: authSession.accessToken, signal: controller.signal, body: { query: trimmedQuery, session_id: sessionIdRef.current, conversation_id: conversationId ?? undefined, include_resume: resumeAttached, deep_thinking: deepThinking, stream: true } })
       if (!response.body) throw new Error('服务没有返回 SSE 流')
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
@@ -235,9 +351,10 @@ function ChatDemo({ initialState, loading = false, hasEarlierMessages = false, o
           if (line.startsWith('event:')) eventType = line.slice(6).trim()
           else if (line.startsWith('data:')) data += line.slice(5).trim()
           else if (line === '') {
-            if (eventType === 'thinking') setPhase('thinking')
-            if (eventType === 'chunk') { const parsed = JSON.parse(data) as StreamEvent; if (parsed.conversation_id) setConversationId(parsed.conversation_id); setMessages(current => current.map(message => message.id === assistantMessageId ? { ...message, content: message.content + (parsed.content || '') } : message)); setPhase('streaming') }
-            if (eventType === 'final') { const parsed = JSON.parse(data) as StreamEvent; if (parsed.conversation_id) setConversationId(parsed.conversation_id); setMessages(current => current.map(message => message.id === assistantMessageId ? { ...message, content: parsed.content || '' } : message)) }
+            if (eventType === 'thinking') { const parsed = JSON.parse(data) as StreamEvent; setThinkingText(parsed.text || '正在处理'); setPhase('thinking') }
+            if (eventType === 'chunk') { const parsed = JSON.parse(data) as StreamEvent; if (parsed.conversation_id) setConversationId(parsed.conversation_id); streamContentRef.current += parsed.content || ''; scheduleStreamRender(assistantMessageId); setThinkingText('正在生成回答'); setPhase('streaming') }
+            if (eventType === 'final') { const parsed = JSON.parse(data) as StreamEvent; if (parsed.conversation_id) setConversationId(parsed.conversation_id); streamContentRef.current = parsed.content || streamContentRef.current; if (streamFrameRef.current !== null) { window.cancelAnimationFrame(streamFrameRef.current); streamFrameRef.current = null }; setMessages(current => current.map(message => message.id === assistantMessageId ? { ...message, content: streamContentRef.current } : message)); setThinkingText('回答已生成') }
+            if (eventType === 'error') { const parsed = JSON.parse(data) as StreamEvent; if (parsed.conversation_id) setConversationId(parsed.conversation_id); throw new Error(parsed.message || '模型请求失败') }
             if (eventType === 'done') setPhase('done')
             eventType = 'message'
             data = ''
@@ -256,12 +373,13 @@ function ChatDemo({ initialState, loading = false, hasEarlierMessages = false, o
   }
 
   return <section className="chat-stage">
-    {loading ? <div className="chat-state"><span className="state-spinner" />正在加载会话…</div> : messages.length ? <div className="chat-transcript">{hasEarlierMessages && <button className="load-earlier" type="button" onClick={onLoadEarlier}>加载更早消息</button>}{messages.map((message, index) => message.role === 'USER' ? <div key={message.id} className="message-row user-message"><div className="user-bubble">{message.content}</div></div> : message.role === 'ASSISTANT' ? <div key={message.id} className="message-row assistant-message"><div className="assistant-mark" aria-hidden="true">✦</div><div className="assistant-body"><div className="stream-status"><span className={`dot ${index === messages.length - 1 ? phase : 'done'}`} />{index === messages.length - 1 ? phase === 'thinking' ? '准备回答' : phase === 'streaming' ? '正在生成' : phase === 'done' ? '已完成' : phase === 'cancelled' ? '已停止' : '回答' : '已完成'}</div><div className="answer">{message.content || '正在整理你的问题…'}</div>{index === messages.length - 1 && (phase === 'done' || phase === 'cancelled' || phase === 'error') && <div className="message-actions"><button title="复制回答" onClick={() => void navigator.clipboard?.writeText(message.content)}>▣</button><button title="重新生成" onClick={() => void send()}>↻</button><button title="回答有帮助">♡</button></div>}</div></div> : null)}</div> : <div className="chat-welcome"><span className="brand-mark" aria-hidden="true">✦</span><h2>开始一场面试练习</h2><p>告诉我目标岗位，或者直接说说你想练习的题目。</p></div>}
-    <div className="chat-composer"><div className="composer-input"><input value={query} disabled={loading} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && void send()} placeholder={loading ? '正在加载会话…' : '向面试助手提问'} /><div className="composer-tools"><button className="tool-button" type="button">＋ 添加简历上下文</button><button className="tool-button" type="button">快速模式⌄</button><span className="composer-hint">Enter 发送</span><button className="send-button" onClick={() => void send()} disabled={loading || !query.trim() || phase === 'streaming' || phase === 'thinking'} aria-label="发送">↑</button><button className="stop-button" onClick={() => abortControllerRef.current?.abort()} disabled={phase !== 'streaming' && phase !== 'thinking'} aria-label="停止">■</button></div></div></div>
+    {loading ? <div className="chat-state"><span className="state-spinner" />正在加载会话…</div> : messages.length ? <div className="chat-transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>{hasEarlierMessages && <button className="load-earlier" type="button" onClick={loadEarlierMessages}>加载更早消息</button>}{messages.map((message, index) => message.role === 'USER' ? <div key={message.id} className="message-row user-message"><div className="user-bubble">{message.content}</div></div> : message.role === 'ASSISTANT' ? <div key={message.id} className="message-row assistant-message"><div className="assistant-mark" aria-hidden="true">✦</div><div className="assistant-body"><div className="stream-status"><span className={`dot ${index === messages.length - 1 ? phase : 'done'}`} />{index === messages.length - 1 ? phase === 'thinking' ? thinkingText : phase === 'streaming' ? thinkingText : phase === 'done' ? '已完成' : phase === 'cancelled' ? '已停止' : phase === 'error' ? '处理失败' : '回答' : '已完成'}</div><div className="answer">{message.content ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown> : '正在整理你的问题…'}</div>{index === messages.length - 1 && (phase === 'done' || phase === 'cancelled' || phase === 'error') && <div className="message-actions"><button title="复制回答" onClick={() => void navigator.clipboard?.writeText(message.content)} aria-label="复制回答">▣</button><button title="重新生成" onClick={() => void send(messages.slice(0, index).reverse().find(item => item.role === 'USER')?.content)} aria-label="重新生成">↻</button><button className={feedback[message.id] ? 'active' : ''} title="回答有帮助" aria-label="回答有帮助" aria-pressed={Boolean(feedback[message.id])} onClick={() => setFeedback(current => { const next = { ...current }; if (next[message.id]) delete next[message.id]; else next[message.id] = true; return next })}>♡</button></div>}</div></div> : null)}</div> : <div className="chat-welcome"><span className="brand-mark" aria-hidden="true">✦</span><h2>开始一场面试练习</h2><p>告诉我目标岗位，或者直接说说你想练习的题目。</p></div>}
+    {showScrollLatest && <button className="scroll-latest" type="button" onClick={scrollToLatest}>↓ 查看最新回答</button>}
+    <div className="chat-composer"><div className="composer-input"><textarea value={query} rows={2} disabled={loading} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }} placeholder={loading ? '正在加载会话…' : '向面试助手提问'} /><div className="composer-tools"><button className={resumeAttached ? 'tool-button active' : 'tool-button'} type="button" onClick={() => void toggleResume()} disabled={loading || resumeLoading} aria-pressed={resumeAttached}>{resumeLoading ? '读取简历…' : resumeAttached ? '已附带简历' : '＋ 添加简历上下文'}</button><button className={deepThinking ? 'tool-button active' : 'tool-button'} type="button" onClick={() => setDeepThinking(current => !current)} disabled={loading || phase === 'streaming' || phase === 'thinking'} aria-pressed={deepThinking}>{deepThinking ? '深度思考已开启' : '深度思考'}</button><button className="tool-button" type="button" onClick={() => void clearMemory()} disabled={loading || !conversationId || phase === 'streaming' || phase === 'thinking'} title="清除当前会话记忆">清除记忆</button>{(resumeNotice || memoryNotice) && <span className="resume-context-notice" role="status">{memoryNotice || resumeNotice}</span>}<span className="composer-hint">Enter 发送 · Shift+Enter 换行</span><button className="send-button" onClick={() => void send()} disabled={loading || !query.trim() || phase === 'streaming' || phase === 'thinking'} aria-label="发送">↑</button><button className="stop-button" onClick={() => abortControllerRef.current?.abort()} disabled={phase !== 'streaming' && phase !== 'thinking'} aria-label="停止">■</button></div></div></div>
   </section>
 }
 
-function WorkbenchPage({ children }: { children?: React.ReactNode }) {
+function WorkbenchPage({ children, pageTitle = '简历档案' }: { children?: React.ReactNode; pageTitle?: string }) {
   const { authSession, authStatus, currentUser, logout } = useAuth()
   const navigate = useNavigate()
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 720)
@@ -277,7 +395,7 @@ function WorkbenchPage({ children }: { children?: React.ReactNode }) {
   const menu = [
     { to: '/workbench', label: '面试助手', icon: '⌂' },
     { to: '/resume', label: '简历档案', icon: '▤' },
-    { to: '/jobs', label: '岗位匹配', icon: '⌁' },
+    { to: '/jobs', label: '职业规划', icon: '⌁' },
     { to: '/knowledge', label: '知识库', icon: '◇' },
     { to: '/interview', label: '模拟面试', icon: '◌' },
     { to: '/review', label: '复盘记录', icon: '☷' },
@@ -406,17 +524,23 @@ function WorkbenchPage({ children }: { children?: React.ReactNode }) {
   return <main className={sidebarOpen ? 'app-shell' : 'app-shell sidebar-collapsed'}>
     <aside className="sidebar">
       <div className="sidebar-top"><Link className="brand" to="/workbench">ATLASMIND</Link><button className="icon-button" onClick={() => setSidebarOpen(open => !open)} aria-label={sidebarOpen ? '收起侧边栏' : '展开侧边栏'}>◀</button></div>
-      <nav className="sidebar-nav" aria-label="工作台导航"><p className="nav-section-title">工作区</p>{menu.map(item => <NavLink key={item.to} to={item.to} className={({ isActive }) => isActive ? 'side-item active' : 'side-item'}><span className="side-icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span>{item.to !== '/workbench' && <small>规划中</small>}</NavLink>)}</nav>
+      <nav className="sidebar-nav" aria-label="工作台导航"><p className="nav-section-title">工作区</p>{menu.map(item => <NavLink key={item.to} to={item.to} className={({ isActive }) => isActive ? 'side-item active' : 'side-item'}><span className="side-icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span>{item.to === '/jobs' && <small>NEW</small>}{item.to !== '/workbench' && item.to !== '/jobs' && <small>规划中</small>}</NavLink>)}</nav>
       <div className="sidebar-bottom"><div className="user-card"><span className="avatar">{currentUser?.username?.slice(0, 1).toUpperCase() || 'D'}</span><span className="user-copy"><strong>{currentUser?.username || 'dev-user'}</strong><small>个人空间</small></span><button className="more-button" onClick={() => { logout(); navigate('/login') }} aria-label="退出登录">⋯</button></div></div>
     </aside>
-    <section className="main-workspace"><header className="workspace-header"><div><span className="workspace-kicker">PERSONAL INTERVIEW ASSISTANT</span><h1>{children ? '简历档案' : '面试助手'}</h1></div><div className="header-actions"><span className="connection-state"><span className="connection-dot" />已连接</span><button className="header-icon" onClick={() => setSidebarOpen(open => !open)} aria-label="切换侧边栏">☰</button></div></header>{children ? <div className="workspace-content standalone-content">{children}</div> : <div className="workspace-body"><aside className="conversation-sidebar"><div className="conversation-heading"><span>会话</span><button className="conversation-add" disabled={creatingConversation} onClick={() => void createConversation()} aria-label="新建会话">{creatingConversation ? '…' : '＋'}</button></div>{conversationError && <div className="conversation-error"><span>{conversationError}</span><button type="button" onClick={() => void refreshConversations()}>重试</button></div>}{conversationLoading ? <div className="conversation-state"><span className="state-spinner" />加载中…</div> : conversations.length ? <div className="conversation-list">{conversations.map(item => { const busy = busyConversationIds.has(item.id); return <div key={item.id} className={item.id === activeConversationId ? 'conversation-item active' : 'conversation-item'}><button className="conversation-select" disabled={busy} onClick={() => selectConversation(item.id)}><span className="conversation-icon">◌</span><span>{item.title}</span></button><span className="conversation-actions"><button type="button" disabled={busy} title="重命名" onClick={() => void renameConversationById(item.id, item.title)}>✎</button><button type="button" disabled={busy} title="删除" onClick={() => void removeConversation(item.id)}>×</button></span></div> })}</div> : <div className="conversation-state">还没有会话</div>}</aside><div className="workspace-content"><div className="workspace-context"><span>当前对话</span><span className="context-line" /> <span className="context-muted">{conversations.find(item => item.id === activeConversationId)?.title || '选择一个会话'}</span></div><ChatDemo key={activeConversationId ?? 'empty'} loading={messagesLoading} hasEarlierMessages={hasEarlierMessages} onLoadEarlier={() => void loadEarlierMessages()} initialState={conversations.find(item => item.id === activeConversationId)} onTitleChange={renameConversation} onStateChange={saveConversationState} /></div></div>}</section>
+    <section className="main-workspace"><header className="workspace-header"><div><span className="workspace-kicker">PERSONAL INTERVIEW ASSISTANT</span><h1>{children ? pageTitle : '面试助手'}</h1></div><div className="header-actions"><span className="connection-state"><span className="connection-dot" />已连接</span><button className="header-icon" onClick={() => setSidebarOpen(open => !open)} aria-label="切换侧边栏">☰</button></div></header>{children ? <div className="workspace-content standalone-content">{children}</div> : <div className="workspace-body"><aside className="conversation-sidebar"><div className="conversation-heading"><span>会话</span><button className="conversation-add" disabled={creatingConversation} onClick={() => void createConversation()} aria-label="新建会话">{creatingConversation ? '…' : '＋'}</button></div>{conversationError && <div className="conversation-error"><span>{conversationError}</span><button type="button" onClick={() => void refreshConversations()}>重试</button></div>}{conversationLoading ? <div className="conversation-state"><span className="state-spinner" />加载中…</div> : conversations.length ? <div className="conversation-list">{conversations.map(item => { const busy = busyConversationIds.has(item.id); return <div key={item.id} className={item.id === activeConversationId ? 'conversation-item active' : 'conversation-item'}><button className="conversation-select" disabled={busy} onClick={() => selectConversation(item.id)}><span className="conversation-icon">◌</span><span>{item.title}</span></button><span className="conversation-actions"><button type="button" disabled={busy} title="重命名" onClick={() => void renameConversationById(item.id, item.title)}>✎</button><button type="button" disabled={busy} title="删除" onClick={() => void removeConversation(item.id)}>×</button></span></div> })}</div> : <div className="conversation-state">还没有会话</div>}</aside><div className="workspace-content"><div className="workspace-context"><span>当前对话</span><span className="context-line" /> <span className="context-muted">{conversations.find(item => item.id === activeConversationId)?.title || '选择一个会话'}</span></div><ChatDemo key={activeConversationId ?? 'empty'} loading={messagesLoading} hasEarlierMessages={hasEarlierMessages} onLoadEarlier={() => void loadEarlierMessages()} initialState={conversations.find(item => item.id === activeConversationId)} onTitleChange={renameConversation} onStateChange={saveConversationState} /></div></div>}</section>
   </main>
 }
 
 function ResumeWorkbenchPage() {
   const { currentUser, authSession } = useAuth()
   if (!currentUser || !authSession) return null
-  return <WorkbenchPage><ResumePage key={currentUser.username} username={currentUser.username} accessToken={authSession.accessToken} /></WorkbenchPage>
+  return <WorkbenchPage pageTitle="简历档案"><ResumePage key={currentUser.username} username={currentUser.username} accessToken={authSession.accessToken} /></WorkbenchPage>
+}
+
+function PlanningWorkbenchPage() {
+  const { authSession } = useAuth()
+  if (!authSession) return null
+  return <WorkbenchPage pageTitle="职业规划"><PlanningPage accessToken={authSession.accessToken} /></WorkbenchPage>
 }
 
 function PlaceholderPage({ title, description }: { title: string; description: string }) {
@@ -426,7 +550,7 @@ function PlaceholderPage({ title, description }: { title: string; description: s
 }
 
 function App() {
-  return <BrowserRouter><AuthProvider><Routes><Route path="/login" element={<AuthPage mode="login" />} /><Route path="/register" element={<AuthPage mode="register" />} /><Route element={<ProtectedRoute />}><Route path="/workbench" element={<WorkbenchPage />} /><Route path="/resume" element={<ResumeWorkbenchPage />} /><Route path="/jobs" element={<PlaceholderPage title="岗位匹配" description="导入目标岗位后，生成能力要求与准备重点。" />} /><Route path="/knowledge" element={<PlaceholderPage title="知识库" description="沉淀面试知识和岗位资料，后续接入检索能力。" />} /><Route path="/interview" element={<PlaceholderPage title="模拟面试" description="从结构化问题开始，逐步接入 InterviewManagerAgent。" />} /><Route path="/review" element={<PlaceholderPage title="复盘记录" description="查看练习记录、回答证据和改进建议。" />} /></Route><Route path="/" element={<Navigate to="/workbench" replace />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></AuthProvider></BrowserRouter>
+  return <BrowserRouter><AuthProvider><Routes><Route path="/login" element={<AuthPage mode="login" />} /><Route path="/register" element={<AuthPage mode="register" />} /><Route element={<ProtectedRoute />}><Route path="/workbench" element={<WorkbenchPage />} /><Route path="/resume" element={<ResumeWorkbenchPage />} /><Route path="/jobs" element={<PlanningWorkbenchPage />} /><Route path="/knowledge" element={<PlaceholderPage title="知识库" description="沉淀面试知识和岗位资料，后续接入检索能力。" />} /><Route path="/interview" element={<PlaceholderPage title="模拟面试" description="从结构化问题开始，逐步接入 InterviewManagerAgent。" />} /><Route path="/review" element={<PlaceholderPage title="复盘记录" description="查看练习记录、回答证据和改进建议。" />} /></Route><Route path="/" element={<Navigate to="/workbench" replace />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></AuthProvider></BrowserRouter>
 }
 
 createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>)
