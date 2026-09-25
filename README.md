@@ -1,219 +1,165 @@
-# AtlasMind
+# AtlasMind Interview
 
-## 第四课进度
+AtlasMind Interview 是一个面向求职者的 AI 面试辅助系统。它把简历档案、岗位目标、面试对话和职业规划放在同一个工作台中，帮助用户完成简历准备、岗位分析、面试练习和阶段性学习规划。
 
-已增加登录注册、路由保护和浅色侧边栏工作台。`/resume` 已接入用户简历数据库，支持姓名、目标岗位、个人简介、教育经历、实习经历、项目经历和专业技能；尚不支持文件上传解析。本课仍在进行中，详见 [第四课笔记](doc/04-web-foundation-notes.md)。下方第一至三课内容为历史教学记录。
+项目参考 Plexus 的分层思路，但围绕“面试辅助”场景重新设计了领域模型和 Agent 工作流。
 
-这是 AtlasMind 个人知识与工作助手的课程练习项目，参考原 Plexus 的架构但使用独立品牌。第一节课只实现一条最小的直接聊天链路，用来理解 React、Spring Boot、Python Agent 和 SSE 之间的职责边界。
+## 当前能力
 
-当前 Python 服务已接入 LangChain `create_agent`，默认连接 DeepSeek 的 OpenAI 兼容接口，并通过现有 SSE 链路流式返回聊天 Agent 内容。职业规划页面另有一条 Planner -> Task Summarizer -> Report Writer 工作流，负责生成能力评估、岗位方向、学习计划和面试重点；工具能力已通过 MCP Server 标准化。请求进入模型前会经过轻量查询审查，聊天执行期间会把工具调用状态推送到前端。原 Plexus 的 `plexus-core` 只作为架构参照。简历上下文由 Spring 根据当前登录用户从数据库读取。
+- 用户注册、登录、JWT 鉴权和当前用户信息。
+- 简历档案维护：目标岗位、个人简介、教育经历、实习经历、项目经历和专业技能。
+- 面试会话管理：创建、分页查询、重命名、删除会话，分页加载历史消息。
+- AI 面试问答：支持简历上下文、会话历史、深度思考状态和流式回答。
+- 会话记忆：读取、刷新和清除会话摘要及结构化事实，减少长对话重复传递上下文。
+- 职业规划：通过 Planner、Task Summarizer、Report Writer 工作流生成能力评估、岗位方向、学习计划和面试重点。
+- MCP 工具接入：将公开搜索、简历证据分析、岗位匹配、岗位方向推荐、学习计划和面试题生成等能力接入 Agent。
+- 前端工作台：登录、路由保护、简历编辑、会话侧栏、Markdown 回答渲染、流式状态展示和请求取消。
 
-真实模型启动配置和本课 Agent 单元记录见 [第 5 课 Agent 笔记](doc/05-agent-notes.md)。Tools 与 MCP 将继续沿本课后续单元展开。
-
-## 第一课学到了什么
-
-一次直接聊天请求经过下面的链路：
-
-```text
-React Web
-  -> POST /api/agents/PlexusAgent/execute
-Vite 代理
-  -> Spring Boot :8200
-Spring Controller / Service
-  -> Python Agent :8100
-Python Agent
-  -> SSE thinking / chunk / final / done
-Spring Boot
-  -> SSE 原样转发
-React Web
-  -> 解析事件并更新页面状态
-```
-
-各层职责如下：
-
-| 层 | 负责什么 | 不负责什么 |
-|---|---|---|
-| React | 输入、按钮、页面状态、SSE 解析、回答渲染 | 不执行 Agent，不直接调用模型工具 |
-| Spring Boot | HTTP 入口、参数校验、统一错误、SSE 转发、取消下游订阅 | 不做大模型推理 |
-| Python Agent | Agent 执行、模型推理、工具调用、产生事件 | 不负责浏览器页面状态 |
-
-边界清晰的意义是：请求参数错误由 Java 尽早拦截，模型执行问题留在 Python Agent，页面显示问题留在 React；替换某一层时，不需要重写其他层。
-
-## 请求和事件协议
-
-前端发送的请求体是：
-
-```json
-{
-  "query": "什么是 SSE？",
-  "session_id": "web-demo",
-  "stream": true
-}
-```
-
-- `query`：用户本轮输入。
-- `session_id`：业务会话标识，用来关联多轮对话；当前示例只传递它，还没有实现持久化记忆。
-- `stream`：是否要求持续返回 SSE 事件。当前教学服务要求它为 `true`。
-
-事件示例：
+## 技术架构
 
 ```text
-event: thinking
-data: {"text":"正在准备回答","session_id":"web-demo"}
-
-event: chunk
-data: {"content":"你问的是：什么是 SSE。","session_id":"web-demo"}
-
-event: final
-data: {"content":"你问的是：什么是 SSE。","session_id":"web-demo"}
-
-event: done
-data:
-
+React + Vite
+    │ REST / SSE
+    ▼
+Spring Boot WebFlux
+    ├─ JWT 鉴权与用户数据隔离
+    ├─ 简历、会话、消息、记忆和职业规划 API
+    ├─ PostgreSQL / MyBatis / Flyway
+    └─ 转发 Agent 请求并持久化会话结果
+    │ HTTP
+    ▼
+Python Agent Service
+    ├─ LangChain Agent
+    ├─ Planner -> Task Summarizer -> Report Writer
+    ├─ MCP Client / MCP Server
+    └─ SSE 事件流
 ```
 
-事件之间用空行分隔。网络传输的分块不一定刚好对应一个完整事件，所以 React 端先把文本放进 `buffer`，再按换行和空行组装事件。
-
-| 事件 | 前端动作 |
-|---|---|
-| `thinking` | 显示 Agent 正在准备 |
-| `chunk` | 把 `content` 追加到当前回答 |
-| `final` | 用完整内容覆盖当前回答 |
-| `done` | 把请求状态标记为完成，不提供正文 |
-| HTTP `400` | 显示参数错误，例如 `query 不能为空` |
-| HTTP `503` | 显示 Agent 暂不可用 |
-
-## 用户主动停止
-
-React 在发送请求时创建 `AbortController`，并把 `signal` 传给 `fetch`：
+聊天链路使用统一的 SSE 事件协议：
 
 ```text
-点击停止
-  -> React controller.abort()
-  -> 浏览器关闭 HTTP 请求
-  -> Spring WebFlux 取消 Python 下游订阅
-  -> Python 写 SSE 时发现客户端断开
-  -> Python 停止继续写事件
+thinking -> chunk -> final -> done
 ```
 
-页面会保留已经收到的部分回答，并把状态显示为“已停止”。组件卸载时也会自动取消正在进行的请求。
+`thinking` 用于展示工具或模型处理状态，`chunk` 用于增量渲染回答，`final` 提供完整回答，`done` 标记本轮传输结束。浏览器主动停止请求时，Spring 会取消下游订阅，Python 服务停止继续写入事件。
 
-## 代码目录
+## 目录结构
 
 ```text
-plexus-personal/
-├─ core/
-│  ├─ app.py                 # 教学用 Python SSE Agent
-│  └─ client.py              # Python SSE 客户端和手写解析器
-├─ server-spring/
-│  ├─ pom.xml                # Spring Boot WebFlux 和校验依赖
-│  └─ src/main/java/com/plexus/personal/
-│     ├─ ServerApplication.java
-│     ├─ AgentController.java       # HTTP 接口和 SSE 响应类型
-│     ├─ AgentService.java          # 转发到 Python Agent
-│     ├─ CoreClientConfig.java      # WebClient 地址配置
-│     ├─ ChatRequest.java            # query/session_id/stream
-│     ├─ ApiError.java              # 统一错误结构
-│     └─ GlobalExceptionHandler.java
-├─ web/
-│  ├─ src/main.tsx            # React 页面、请求、SSE 解析、停止操作
-│  ├─ src/style.css           # 页面样式
-│  ├─ vite.config.ts          # /api 代理到 Spring Boot
-│  └─ package.json
-├─ server/App.java            # 早期 JDK HttpServer 代理，仅作对照，不再使用
-└─ tools/                     # 项目内的 Maven 工具包
+.
+├─ core/                         # Python Agent 和 MCP 能力
+│  ├─ app.py                     # HTTP/SSE 服务入口
+│  ├─ agent.py                   # LangChain Interview Agent
+│  ├─ planning_workflow.py       # 职业规划多阶段工作流
+│  ├─ mcp_tools.py               # MCP 工具适配器
+│  ├─ career_mcp_server.py       # 求职分析 MCP Server
+│  ├─ search_mcp_server.py       # 公开搜索 MCP Server
+│  └─ test_*.py                  # Agent、工具、记忆和工作流测试
+├─ server-spring/                # Spring Boot API 和数据层
+│  ├─ src/main/java/...          # 用户、认证、简历、会话和规划领域
+│  └─ src/main/resources/        # Flyway migration 与 MyBatis mapper
+├─ web/                          # React/Vite 面试工作台
+├─ doc/                          # 课程笔记、架构记录和验收记录
+├─ docker-compose.yml            # PostgreSQL 本地开发环境
+└─ requirements.txt              # Python 依赖
 ```
 
-真正需要重点阅读的文件是：
+## 本地启动
 
-- [React 请求与 SSE 解析](web/src/main.tsx)
-- [Spring Controller](server-spring/src/main/java/com/plexus/personal/AgentController.java)
-- [Spring 转发 Service](server-spring/src/main/java/com/plexus/personal/AgentService.java)
-- [Python SSE 服务](core/app.py)
-- [第一课个人学习笔记与架构图](doc/01-architecture-notes.md)
-- [第二课环境、启动和验收记录](doc/02-environment-notes.md)
-- [第一课课程大纲](../plexus/docs/course/01-architecture.md)
-
-## 启动第一课代码
-
-需要三个终端。先启动 Python，再启动 Spring，最后启动前端。
-
-终端一：
+### 1. 启动 PostgreSQL
 
 ```powershell
-cd D:\CodeX_project\project\plexus-personal
+docker compose up -d postgres
+```
+
+默认连接信息：数据库 `plexus_personal`，用户 `plexus`，密码 `plexus`，端口 `5432`。Spring Boot 启动时会自动执行 Flyway migration。
+
+### 2. 启动 Python Agent
+
+建议使用 Python 虚拟环境：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+配置模型和可选搜索服务：
+
+```powershell
+$env:DEEPSEEK_API_KEY = "你的 DeepSeek API Key"
+$env:TAVILY_API_KEY = "你的 Tavily API Key"
 python core\app.py
 ```
 
-终端二：
+Python 服务默认监听 `http://127.0.0.1:8100`。如果只验证本地工具逻辑，可以不配置真实模型密钥，直接运行测试。
+
+### 3. 启动 Spring Boot
+
+使用 IDEA 内置 Maven 或本机 Maven 执行：
 
 ```powershell
-cd D:\CodeX_project\project\plexus-personal\server-spring
-$env:JAVA_HOME = 'C:\Program Files\Java\jdk-22'
-$env:Path = "$env:JAVA_HOME\bin;D:\CodeX_project\project\plexus-personal\tools\apache-maven-3.9.16\bin;$env:Path"
-& "D:\CodeX_project\project\plexus-personal\tools\apache-maven-3.9.16\bin\mvn.cmd" -B -DskipTests package
+cd server-spring
+mvn -B -DskipTests package
 java -jar target\server-spring-0.0.1-SNAPSHOT.jar
 ```
 
-终端三：
+Spring Boot 默认监听 `http://127.0.0.1:8200`，通过 `PLEXUS_CORE_BASE_URL` 指向 Python 服务。
+
+### 4. 启动 React
 
 ```powershell
-cd D:\CodeX_project\project\plexus-personal\web
+cd web
 npm install
 npm run dev -- --host=127.0.0.1
 ```
 
-打开 [http://localhost:5173](http://localhost:5173)。Vite 的参数要写成 `--host=127.0.0.1`，否则某些 Vite 版本会把 `127.0.0.1` 当作项目目录。
+打开 <http://127.0.0.1:5173> 即可进入面试工作台。
 
-## 第二课环境与最小启动
+## 常用配置
 
-第二课已验证 Java 22.0.2、项目自带 Maven 3.9.16、Python 3.14.5、Node.js 22.13.1、npm 10.9.2 和 Docker 29.8.0。用户级 `JAVA_HOME` 指向 `C:\Program Files\Java\jdk-22`。如果当前终端仍读取旧值，先执行：
+| 环境变量 | 默认值 | 作用 |
+|---|---|---|
+| `DEEPSEEK_API_KEY` | 无 | DeepSeek 模型调用凭证 |
+| `TAVILY_API_KEY` | 无 | 公开搜索工具凭证 |
+| `PLEXUS_CORE_BASE_URL` | `http://127.0.0.1:8100` | Spring 调用 Python Agent 的地址 |
+| `SERVER_PORT` | `8200` | Spring Boot 端口 |
+| `DB_URL` | 本地 PostgreSQL | 数据库连接地址 |
+| `ATLAS_JWT_SECRET` | 开发默认值 | JWT 签名密钥，部署时必须替换 |
 
-```powershell
-$env:JAVA_HOME = 'C:\Program Files\Java\jdk-22'
-$env:Path = "$env:JAVA_HOME\bin;$env:Path"
-```
+`core/.env`、前端本地环境文件和运行日志已加入 `.gitignore`，不要把真实密钥提交到仓库。
 
-Spring Boot 支持 `SERVER_PORT` 和 `PLEXUS_CORE_BASE_URL` 环境变量，默认值分别为 `8200` 和 `http://127.0.0.1:8100`。完整记录见 [第二课环境记录](doc/02-environment-notes.md)。
+## 验证
 
-最小检查接口如下：
-
-```powershell
-curl.exe -sS http://127.0.0.1:8200/agents/PlexusAgent/health
-curl.exe -sS http://127.0.0.1:8100/agents
-```
-
-预期分别返回 Spring 服务状态和 `PlexusAgent` 列表。第一课的 SSE 请求和前端页面也已重新验收通过。
-
-## 手工验收
-
-正常请求应依次看到 `thinking`、多个 `chunk`、`final` 和 `done`：
+运行 Python 单元测试：
 
 ```powershell
-curl.exe -sS -N --max-time 6 `
-  -X POST http://127.0.0.1:5173/api/agents/PlexusAgent/execute `
-  -H "Content-Type: application/json" `
-  --data-raw '{"query":"什么是 SSE？","session_id":"manual-1","stream":true}'
+python -m unittest discover -s core -p "test_*.py"
 ```
 
-空 `query` 应返回统一错误：
+构建前端：
 
-```json
-{
-  "code": "VALIDATION_ERROR",
-  "message": "query 不能为空"
-}
+```powershell
+cd web
+npm run build
 ```
 
-生成过程中点击页面的“停止”，应保留部分回答并显示“已停止”；Spring 日志会出现 `agent SSE cancelled by client`，Python 日志会出现 `client disconnected; stop streaming`。
+构建后端：
 
-## 第一课范围
+```powershell
+cd server-spring
+mvn -B -DskipTests package
+```
 
-第一课已经完成服务边界、SSE 事件、React 状态、请求取消、架构图、时序图和 5 个核心用例的整理。下面这些内容属于后续课程，本 README 不把它们当作当前已完成能力：
+## 当前边界
 
-- 完整的 Plan-and-Solve 多阶段 Agent；当前已经有第一版 Core 规划工作流，Spring/UI 编排和 Reviewer 仍待后续接入；
-- 登录、JWT 和 PostgreSQL；
-- 文件上传、向量检索和知识库；
-- WebSocket 协作空间和 Kafka 事件系统。
+当前版本已经完成核心全链路和 Agent 工作流，但以下能力仍属于后续迭代方向：
 
-第二课完成了环境版本、配置默认值、端口、启动顺序、健康检查和最小链路验收。第三课将在这些边界上实现 Java 用户域与认证域，包括注册、登录、JWT 和当前用户接口。
+- 简历文件上传、PDF/Word 解析和结构化导入。
+- 面向面试知识库的文档切分、向量检索、引用回溯和检索效果评测。
+- 面试回答质量、检索召回率、首 token 延迟和并发稳定性等可量化性能测试。
+- 生产环境所需的模型降级、异步任务队列、可观测性和更细粒度的权限策略。
+
+## 学习记录
+
+项目的架构拆解、环境配置、认证实现、前端工作台和 Agent 实现过程记录在 [`doc/`](doc/) 目录中。代码以可运行的面试辅助系统为主，课程笔记用于解释各模块的设计取舍和验收过程。
