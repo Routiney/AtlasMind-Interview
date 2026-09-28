@@ -55,6 +55,18 @@ public class GlobalExceptionHandler {
                 .body(new ApiError("RESUME_REQUIRED", exception.getMessage()));
     }
 
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ApiError> handleInvalidDocument(IllegalArgumentException exception) {
+        return ResponseEntity.badRequest()
+                .body(new ApiError("INVALID_DOCUMENT", exception.getMessage()));
+    }
+
+    @ExceptionHandler(java.util.NoSuchElementException.class)
+    public ResponseEntity<ApiError> handleDocumentNotFound(java.util.NoSuchElementException exception) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(new ApiError("DOCUMENT_NOT_FOUND", "文档不存在"));
+    }
+
     @ExceptionHandler(CareerPlanNotFoundException.class)
     public ResponseEntity<ApiError> handleCareerPlanNotFound(CareerPlanNotFoundException exception) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)

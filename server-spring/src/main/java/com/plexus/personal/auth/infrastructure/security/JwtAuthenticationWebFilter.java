@@ -23,6 +23,7 @@ public class JwtAuthenticationWebFilter implements WebFilter {
     private static final String AGENT_PLANS_PATH = "/agents/PlexusAgent/plans";
     private static final String CONVERSATIONS_PATH = "/api/conversations";
     private static final String RESUME_PATH = "/api/resume";
+    private static final String DOCUMENTS_PATH = "/api/documents";
 
     private final JwtTokenService jwtTokenService;
 
@@ -65,7 +66,9 @@ public class JwtAuthenticationWebFilter implements WebFilter {
                 && HttpMethod.GET.equals(exchange.getRequest().getMethod()))
                 || path.equals(CONVERSATIONS_PATH)
                 || path.startsWith(CONVERSATIONS_PATH + "/")
-                || path.equals(RESUME_PATH);
+                || path.equals(RESUME_PATH)
+                || path.equals(DOCUMENTS_PATH)
+                || path.startsWith(DOCUMENTS_PATH + "/");
     }
 
     private Mono<Void> unauthorized(ServerWebExchange exchange) {

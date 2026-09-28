@@ -13,6 +13,9 @@ AtlasMind Interview 是一个面向求职者的 AI 面试辅助系统。它把�
 - 会话记忆：读取、刷新和清除会话摘要及结构化事实，减少长对话重复传递上下文。
 - 职业规划：通过 Planner、Task Summarizer、Report Writer 工作流生成能力评估、岗位方向、学习计划和面试重点。
 - MCP 工具接入：将公开搜索、简历证据分析、岗位匹配、岗位方向推荐、学习计划和面试题生成等能力接入 Agent。
+- 面试知识库：支持 PDF、DOCX、Markdown 和 TXT 上传，使用 Apache Tika 提取文本、分块、生成 Embedding，并按当前用户检索后注入面试 Agent。
+- 文档质量处理：保留原始文本和规范化文本，识别疑似乱码，并支持通过 Core Agent 进行受约束的文本审核。
+- 知识库工作台：支持拖拽上传、文档列表、状态筛选、搜索、删除和重新索引，并在回答中标记基础来源。
 - 前端工作台：登录、路由保护、简历编辑、会话侧栏、Markdown 回答渲染、流式状态展示和请求取消。
 
 ## 技术架构
@@ -63,6 +66,8 @@ thinking -> chunk -> final -> done
 ├─ docker-compose.yml            # PostgreSQL 本地开发环境
 └─ requirements.txt              # Python 依赖
 ```
+
+文档和检索相关代码位于 `server-spring/src/main/java/com/plexus/personal/document/`，迁移版本从 `V8` 到 `V11`：文档元数据、文档分片、Embedding 和质量审核信息分别独立维护。默认文件存储在 `server-spring/data/documents/{userId}/`，该目录被 Git 忽略。
 
 ## 本地启动
 
@@ -126,6 +131,10 @@ npm run dev -- --host=127.0.0.1
 | `SERVER_PORT` | `8200` | Spring Boot 端口 |
 | `DB_URL` | 本地 PostgreSQL | 数据库连接地址 |
 | `ATLAS_JWT_SECRET` | 开发默认值 | JWT 签名密钥，部署时必须替换 |
+| `ATLAS_DOCUMENT_MAX_BYTES` | `10485760` | 单个文档大小上限，默认 10 MiB |
+| `ATLAS_DOCUMENTS_ROOT` | `./data/documents` | 文档本地存储根目录 |
+| `ATLAS_EMBEDDING_PROVIDER` | `local` | `local` 本地回退向量或 `dashscope` 远程 Embedding |
+| `DASHSCOPE_API_KEY` | 无 | DashScope Embedding 模式的访问凭证 |
 
 `core/.env`、前端本地环境文件和运行日志已加入 `.gitignore`，不要把真实密钥提交到仓库。
 
@@ -153,13 +162,16 @@ mvn -B -DskipTests package
 
 ## 当前边界
 
-当前版本已经完成核心全链路和 Agent 工作流，但以下能力仍属于后续迭代方向：
+当前版本已经完成面试知识库的单用户基础闭环，但以下能力仍属于后续迭代方向：
 
-- 简历文件上传、PDF/Word 解析和结构化导入。
-- 面向面试知识库的文档切分、向量检索、引用回溯和检索效果评测。
+- 扫描 PDF 和图片 OCR，以及 PDF 页码、坐标和可点击来源定位。
+- 前端独立来源引用卡片、命中分片邻居扩展和章节恢复。
+- 混合检索、Rerank、异步解析与 Embedding 队列。
 - 面试回答质量、检索召回率、首 token 延迟和并发稳定性等可量化性能测试。
 - 生产环境所需的模型降级、异步任务队列、可观测性和更细粒度的权限策略。
 
 ## 学习记录
 
-项目的架构拆解、环境配置、认证实现、前端工作台和 Agent 实现过程记录在 [`doc/`](doc/) 目录中。代码以可运行的面试辅助系统为主，课程笔记用于解释各模块的设计取舍和验收过程。
+项目的架构拆解、环境配置、认证实现、前端工作台、Agent 和知识库实现过程记录在 [`doc/`](doc/) 目录中。代码以可运行的面试辅助系统为主，课程笔记用于解释各模块的设计取舍和验收过程。
+
+下一阶段课程计划见 [`doc/07-redis-kafka-course-plan.md`](doc/07-redis-kafka-course-plan.md)，将以文档处理和面试训练事件为主线学习 Redis、Kafka、消费幂等和任务进度管理。

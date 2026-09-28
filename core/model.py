@@ -32,6 +32,12 @@ def create_chat_model() -> Any:
             raise ModelConfigurationError("未配置 DEEPSEEK_API_KEY，无法调用 DeepSeek ChatModel")
         model = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
         base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    elif provider == "dashscope":
+        api_key = os.getenv("DASHSCOPE_API_KEY")
+        if not api_key:
+            raise ModelConfigurationError("未配置 DASHSCOPE_API_KEY，无法调用 DashScope ChatModel")
+        model = os.getenv("DASHSCOPE_CHAT_MODEL", "qwen-plus")
+        base_url = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
     elif provider == "openai":
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
@@ -40,7 +46,7 @@ def create_chat_model() -> Any:
         base_url = os.getenv("OPENAI_BASE_URL")
     else:
         raise ModelConfigurationError(
-            f"不支持的 ATLASMIND_PROVIDER: {provider}，可选值为 deepseek 或 openai"
+            f"不支持的 ATLASMIND_PROVIDER: {provider}，可选值为 deepseek、dashscope 或 openai"
         )
 
     try:

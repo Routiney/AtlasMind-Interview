@@ -119,9 +119,11 @@ def build_user_prompt(
     resume_profile: Any = None,
     target_job: Any = None,
     memory: Any = None,
+    knowledge_context: Any = None,
 ) -> str:
     """生成一次请求对应的动态用户输入提示词。"""
     query_text = query.strip()
+    knowledge_text = "\n".join(f"[{item.get('source','未知文档')}#{item.get('chunk_id')}] {item.get('content','')}" for item in (knowledge_context or [])) or "无匹配知识库片段"
     if not query_text and resume_profile:
         query_text = "请分析这份简历，概括我的优势和短板，推荐适合的岗位方向，并给出下一步改进建议。"
 
@@ -140,6 +142,10 @@ def build_user_prompt(
 {_memory_context(memory)}
 </conversation_memory>
 
+<knowledge_context>
+{knowledge_text}
+</knowledge_context>
+
 <user_query>
 {query_text or "未提供具体问题"}
 </user_query>
@@ -148,6 +154,7 @@ def build_user_prompt(
 
 回答要求：
 - 先直接回答 <user_query>，再说明使用了哪些简历字段和依据。
+- 使用 <knowledge_context> 时，在相关段落末尾标注 `[来源: 文件名#片段编号]`；没有依据时不要编造来源。
 - 区分简历事实、基于事实的推断和行动建议。
 - 如果用户要求分析整份简历，再按“定位、经历证据、技能匹配、主要差距、下一步”组织回答。
 - 如果信息不足以得出可靠结论，指出缺失字段，并给出当前可以执行的建议。"""
@@ -166,12 +173,17 @@ def build_user_prompt(
 {_memory_context(memory)}
 </conversation_memory>
 
+<knowledge_context>
+{knowledge_text}
+</knowledge_context>
+
 <user_query>
 {query_text or "未提供具体问题"}
 </user_query>
 
 处理要求：
 - 优先回答 <user_query> 中的当前问题。
+- 使用 <knowledge_context> 时，在相关段落末尾标注 `[来源: 文件名#片段编号]`；没有依据时不要编造来源。
 - 只有在有依据时才使用简历和岗位信息进行判断。
 - 如果简历或岗位信息为空，不要假设其中的内容。
 - 如果信息不足以得出可靠结论，指出缺失信息，并给出当前可以执行的建议。"""
@@ -184,6 +196,7 @@ def build_chat_messages(
     target_job: Any = None,
     history: Sequence[Mapping[str, Any]] = (),
     memory: Any = None,
+    knowledge_context: Any = None,
 ) -> list[SystemMessage | HumanMessage | AIMessage]:
     """将系统规则、历史消息和当前请求组成 ChatModel 输入。"""
     history_messages: list[HumanMessage | AIMessage | SystemMessage] = []
@@ -203,6 +216,7 @@ def build_chat_messages(
                     resume_profile=resume_profile,
                     target_job=target_job,
                     memory=memory,
+                    knowledge_context=knowledge_context,
                 ),
             }
         ).to_messages()

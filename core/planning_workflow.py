@@ -6,11 +6,12 @@ import json
 import operator
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Mapping, TypedDict
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from career_tools import analyze_resume_evidence, match_resume_to_job, recommend_job_directions
 from mcp_tools import mcp_search_tool
@@ -49,12 +50,46 @@ class TaskSummary(BaseModel):
     implications: list[str] = Field(default_factory=list)
     confidence: Literal["high", "medium", "low"] = "medium"
 
+    @field_validator("findings", "evidence", "gaps", "implications", mode="before")
+    @classmethod
+    def coerce_single_text_to_list(cls, value: Any) -> Any:
+        """兼容模型把单条摘要误返回成字符串的情况。"""
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        return value
+
+
+class MarketSourceAssessment(BaseModel):
+    index: int = Field(ge=0, description="候选来源在输入列表中的下标")
+    relevance: Literal["high", "medium", "low"] = "low"
+    credibility: Literal["high", "medium", "low"] = "medium"
+    include: bool = False
+    reason: str = ""
+
+
+class MarketSourceReview(BaseModel):
+    assessments: list[MarketSourceAssessment] = Field(default_factory=list)
+    accepted_indices: list[int] = Field(default_factory=list)
+    overall_confidence: Literal["high", "medium", "low"] = "low"
+    limitations: list[str] = Field(default_factory=list)
+
 
 class AssessmentItem(BaseModel):
     area: str = Field(description="能力或问题领域")
     conclusion: str = Field(description="基于证据得出的结论")
     evidence: list[str] = Field(default_factory=list, description="支持结论的简历字段或任务证据")
     confidence: Literal["high", "medium", "low"] = "medium"
+
+    @field_validator("evidence", mode="before")
+    @classmethod
+    def coerce_evidence_to_list(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        return value
 
 
 class RoleRecommendation(BaseModel):
@@ -72,6 +107,15 @@ class CapabilityAssessment(BaseModel):
     evidence_limits: list[str] = Field(default_factory=list, description="当前资料无法证明的事项")
     next_actions: list[str] = Field(default_factory=list)
 
+    @field_validator("evidence_limits", "next_actions", mode="before")
+    @classmethod
+    def coerce_collection_fields(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        return value
+
 
 class PlanPhase(BaseModel):
     phase: str
@@ -79,6 +123,15 @@ class PlanPhase(BaseModel):
     tasks: list[str] = Field(default_factory=list)
     deliverables: list[str] = Field(default_factory=list)
     estimated_hours: float = Field(ge=0)
+
+    @field_validator("tasks", "deliverables", mode="before")
+    @classmethod
+    def coerce_phase_text_to_list(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        return value
 
 
 class LearningPlan(BaseModel):
@@ -90,12 +143,30 @@ class LearningPlan(BaseModel):
     interview_focus: list[str] = Field(default_factory=list)
     adjustment_rules: list[str] = Field(default_factory=list)
 
+    @field_validator("interview_focus", "adjustment_rules", mode="before")
+    @classmethod
+    def coerce_plan_collections(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        return value
+
 
 class PlanningReport(BaseModel):
     assessment: CapabilityAssessment
     learning_plan: LearningPlan
     interview_focus: list[str] = Field(default_factory=list)
     evidence_limits: list[str] = Field(default_factory=list)
+
+    @field_validator("interview_focus", "evidence_limits", mode="before")
+    @classmethod
+    def coerce_report_text_to_list(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        return value
 
 
 class InterviewPlanningResult(BaseModel):
@@ -118,6 +189,30 @@ class PlanningGraphState(TypedDict, total=False):
     research_plan: ResearchPlan
     task_results: Annotated[dict[str, TaskSummary], operator.ior]
     report: PlanningReport
+
+
+class MarketResearchState(TypedDict, total=False):
+    task: ResearchTask
+    research_market: bool
+    attempt: int
+    max_attempts: int
+    queries: list[str]
+    search_records: Annotated[list[dict[str, Any]], operator.add]
+    candidates: list[dict[str, Any]]
+    source_review: MarketSourceReview
+    accepted_results: list[dict[str, Any]]
+    rejected_results: list[dict[str, Any]]
+    status: str
+    errors: Annotated[list[str], operator.add]
+
+
+class SpecialistGraphState(TypedDict, total=False):
+    task: ResearchTask
+    context: dict[str, Any]
+    research_market: bool
+    model: Any
+    raw_result: dict[str, Any]
+    summary: TaskSummary
 
 
 _DISPLAY_TERM_REPLACEMENTS = {
@@ -171,7 +266,16 @@ def _structured_model(model: Any, schema: type[BaseModel]) -> Any:
 
 
 def _invoke_structured(model: Any, schema: type[BaseModel], messages: list[Any]) -> BaseModel:
-    return schema.model_validate(_structured_model(model, schema).invoke(messages))
+    structured = _structured_model(model, schema)
+    try:
+        return schema.model_validate(structured.invoke(messages))
+    except ValidationError:
+        # 让模型只修复结构，不重新解释任务内容；schema 的 validator 负责兼容简单单值列表。
+        repair_messages = [*messages, HumanMessage(content=(
+            "上一次结果没有通过结构化 schema 校验。请保留原有事实和结论，严格按照要求的字段类型重新输出；"
+            "所有 list 字段必须使用 JSON 数组，即使只有一项也不能输出字符串。只返回结构化结果。"
+        ))]
+        return schema.model_validate(structured.invoke(repair_messages))
 
 
 def _json(value: Any) -> str:
@@ -261,22 +365,284 @@ def _normalize_plan(plan: ResearchPlan, context: dict[str, Any], research_market
     return ResearchPlan(objective=plan.objective, tasks=tasks)
 
 
-def _execute_task(task: ResearchTask, *, context: dict[str, Any], research_market: bool) -> dict[str, Any]:
+_MAX_MARKET_ATTEMPTS = 2
+_TRACKING_QUERY_KEYS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "gclid", "fbclid"}
+
+
+def _canonical_url(value: Any) -> str:
+    """把搜索结果 URL 规范化，去除追踪参数后用于去重。"""
+    if not isinstance(value, str):
+        return ""
+    raw_url = value.strip()
+    parsed = urlsplit(raw_url)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return ""
+    query = urlencode([
+        (key, item)
+        for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+        if key.lower() not in _TRACKING_QUERY_KEYS and not key.lower().startswith("utm_")
+    ])
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/"), query, ""))
+
+
+def _market_queries(task: ResearchTask, attempt: int) -> list[str]:
+    """生成不携带个人信息的公开检索词；重试时改变检索角度。"""
+    base = " ".join((task.query or task.title).split())[:420]
+    if not base:
+        return []
+    if attempt == 0:
+        candidates = (base, f"{base} 招聘要求 技能")
+    else:
+        candidates = (f"{base} JD 职责 项目经验", f"{base} 技术栈 招聘")
+    return list(dict.fromkeys(item[:500] for item in candidates if item.strip()))
+
+
+def _deduplicate_market_results(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """过滤不完整结果并按规范化 URL、标题和摘要去重。"""
+    seen: set[str] = set()
+    candidates: list[dict[str, Any]] = []
+    for record in records:
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        results = payload.get("results")
+        if not isinstance(results, list):
+            continue
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title", "") or "").strip()
+            url = _canonical_url(item.get("url"))
+            content = str(item.get("content", "") or "").strip()
+            if not title or not url or not content:
+                continue
+            key = url or f"{title.casefold()}::{content[:160].casefold()}"
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append({
+                "index": len(candidates),
+                "title": title[:500],
+                "url": url,
+                "content": content[:2400],
+                "query": record.get("query", ""),
+                "attempt": record.get("attempt", 0),
+            })
+    return candidates[:12]
+
+
+def _market_review_messages(task: ResearchTask, candidates: list[dict[str, Any]]) -> list[Any]:
+    return [
+        SystemMessage(content="""你是公开岗位研究流程中的 Source Evaluator。你只负责评估候选搜索来源，不负责扩写市场结论。
+
+请逐条检查：
+1. 与目标岗位或研究意图的相关性；
+2. 是否包含可核验的岗位职责、技术要求、经验要求或公开来源信息；
+3. 来源是否看起来可信、内容是否像真实岗位或权威公开资料；
+4. 多条结果是否只是同一来源的重复转载。
+
+评估规则：
+- 只使用候选列表中的标题、URL 和摘要，不能访问或假装访问输入中没有的页面。
+- 官方招聘页、知名招聘平台和明确标注来源的公开资料通常比无来源聚合页更可靠，但不要仅凭域名保证内容真实。
+- 相关性低、内容过短、明显重复、无法确认来源或与岗位研究无关的结果应排除。
+- accepted_indices 只能包含 assessments 中 include=true 且 relevance 不为 low 的下标。
+- 没有足够可靠来源时，保留空 accepted_indices，并在 limitations 中说明原因。
+- 不得编造岗位数量、发布时间、公司要求、URL 或行业趋势。只返回符合 MarketSourceReview schema 的结果。"""),
+        HumanMessage(content=(
+            f"研究任务标题：{task.title}\n"
+            f"研究意图：{task.intent}\n"
+            f"检索主题：{task.query or '未提供'}\n"
+            f"候选来源：\n{_json(candidates)}"
+        )),
+    ]
+
+
+def _build_market_research_graph(chat_model: Any):
+    """构建 Market Research Agent 的内部搜索与质量控制子图。"""
+
+    def prepare_queries(state: MarketResearchState) -> dict[str, Any]:
+        attempt = state.get("attempt", 0)
+        return {"queries": _market_queries(state["task"], attempt)}
+
+    def dispatch_queries(state: MarketResearchState) -> list[Send]:
+        return [
+            Send(
+                "search_query",
+                {
+                    "query": query,
+                    "attempt": state.get("attempt", 0),
+                },
+            )
+            for query in state.get("queries", [])
+        ]
+
+    def search_query(state: dict[str, Any]) -> dict[str, Any]:
+        query = str(state.get("query", "")).strip()
+        if not query:
+            return {"errors": ["搜索词为空"]}
+        try:
+            payload = mcp_search_tool.invoke(query)
+            if not isinstance(payload, dict):
+                return {"errors": ["搜索工具返回格式不可解析"]}
+            return {"search_records": [{
+                "attempt": state.get("attempt", 0),
+                "query": query,
+                "payload": payload,
+            }]}
+        except Exception as exc:
+            return {"errors": [f"搜索失败：{type(exc).__name__}"]}
+
+    def filter_candidates(state: MarketResearchState) -> dict[str, Any]:
+        attempt = state.get("attempt", 0)
+        current_records = [
+            record for record in state.get("search_records", [])
+            if record.get("attempt") == attempt
+        ]
+        return {"candidates": _deduplicate_market_results(current_records)}
+
+    def review_sources(state: MarketResearchState) -> dict[str, Any]:
+        candidates = state.get("candidates", [])
+        if not candidates:
+            return {
+                "source_review": MarketSourceReview(limitations=["当前检索轮次没有可评估的有效来源。"]),
+                "accepted_results": [],
+                "rejected_results": [],
+            }
+        try:
+            review = _invoke_structured(
+                chat_model,
+                MarketSourceReview,
+                _market_review_messages(state["task"], candidates),
+            )
+        except Exception as exc:
+            return {
+                "source_review": MarketSourceReview(limitations=["来源评估模型暂时不可用。"]),
+                "accepted_results": [],
+                "rejected_results": candidates,
+                "errors": [f"来源评估失败：{type(exc).__name__}"],
+            }
+
+        valid_indices = {item["index"] for item in candidates}
+        approved_by_assessment = {
+            item.index
+            for item in review.assessments
+            if item.index in valid_indices and item.include and item.relevance != "low"
+        }
+        accepted_indices = set(review.accepted_indices) & approved_by_assessment
+        accepted = [item for item in candidates if item["index"] in accepted_indices]
+        rejected = [item for item in candidates if item["index"] not in accepted_indices]
+        return {
+            "source_review": review.model_copy(update={"accepted_indices": sorted(accepted_indices)}),
+            "accepted_results": accepted,
+            "rejected_results": rejected,
+        }
+
+    def retry_search(state: MarketResearchState) -> dict[str, Any]:
+        return {"attempt": state.get("attempt", 0) + 1}
+
+    def finish(state: MarketResearchState) -> dict[str, Any]:
+        accepted_results = state.get("accepted_results", [])
+        rejected_results = state.get("rejected_results", [])
+        source_review = state.get("source_review", MarketSourceReview(
+            limitations=["没有可供最终评估的公开来源。"]
+        ))
+        if not state.get("research_market"):
+            return {
+                "status": "not_requested",
+                "accepted_results": accepted_results,
+                "rejected_results": rejected_results,
+                "source_review": source_review,
+            }
+        if accepted_results:
+            return {
+                "status": "completed",
+                "accepted_results": accepted_results,
+                "rejected_results": rejected_results,
+                "source_review": source_review,
+            }
+        return {
+            "status": "unavailable",
+            "accepted_results": accepted_results,
+            "rejected_results": rejected_results,
+            "source_review": source_review,
+        }
+
+    def route_after_filter(state: MarketResearchState) -> str:
+        if state.get("candidates"):
+            return "review_sources"
+        if state.get("attempt", 0) + 1 < state.get("max_attempts", _MAX_MARKET_ATTEMPTS):
+            return "retry_search"
+        return "finish"
+
+    def route_after_review(state: MarketResearchState) -> str:
+        if state.get("accepted_results"):
+            return "finish"
+        if state.get("attempt", 0) + 1 < state.get("max_attempts", _MAX_MARKET_ATTEMPTS):
+            return "retry_search"
+        return "finish"
+
+    graph = StateGraph(MarketResearchState)
+    graph.add_node("prepare_queries", prepare_queries)
+    graph.add_node("search_query", search_query)
+    graph.add_node("filter_candidates", filter_candidates)
+    graph.add_node("review_sources", review_sources)
+    graph.add_node("retry_search", retry_search)
+    graph.add_node("finish", finish)
+    graph.add_conditional_edges(
+        START,
+        lambda state: "finish" if not state.get("research_market") else "prepare_queries",
+        {"prepare_queries": "prepare_queries", "finish": "finish"},
+    )
+    graph.add_conditional_edges("prepare_queries", dispatch_queries, ["search_query"])
+    graph.add_edge("search_query", "filter_candidates")
+    graph.add_conditional_edges(
+        "filter_candidates",
+        route_after_filter,
+        {"review_sources": "review_sources", "retry_search": "retry_search", "finish": "finish"},
+    )
+    graph.add_conditional_edges(
+        "review_sources",
+        route_after_review,
+        {"retry_search": "retry_search", "finish": "finish"},
+    )
+    graph.add_edge("retry_search", "prepare_queries")
+    graph.add_edge("finish", END)
+    return graph.compile()
+
+
+def _run_market_research(task: ResearchTask, *, research_market: bool, model: Any) -> dict[str, Any]:
+    result = _build_market_research_graph(model).invoke({
+        "task": task,
+        "research_market": research_market,
+        "attempt": 0,
+        "max_attempts": _MAX_MARKET_ATTEMPTS,
+        "search_records": [],
+        "errors": [],
+    })
+    return {
+        "task_type": task.task_type,
+        "status": result.get("status", "unavailable"),
+        "attempts": result.get("attempt", 0) + 1,
+        "queries": result.get("queries", []),
+        "results": result.get("accepted_results", []),
+        "rejected_results": result.get("rejected_results", []),
+        "source_review": result.get("source_review", MarketSourceReview()).model_dump(mode="json"),
+        "errors": result.get("errors", []),
+    }
+
+
+def _execute_task(task: ResearchTask, *, context: dict[str, Any], research_market: bool, model: Any = None) -> dict[str, Any]:
     """任务执行器只调用确定性能力，不在工具内部进行开放式推理。"""
     if task.task_type == "resume_evidence":
         return {"task_type": task.task_type, "result": context["resume_evidence"]}
     if task.task_type == "role_fit":
         return {"task_type": task.task_type, "result": context.get("job_match", context["job_directions"])}
     if task.task_type == "market_research":
-        if not research_market:
-            return {"task_type": task.task_type, "status": "not_requested", "result": {}}
-        try:
-            return {"task_type": task.task_type, "result": mcp_search_tool.invoke(task.query)}
-        except Exception as exc:
-            return {"task_type": task.task_type, "status": "unavailable", "result": {
-                "message": "公开岗位搜索暂时不可用，不能据此生成市场结论。",
-                "error_type": type(exc).__name__,
-            }}
+        return {"task_type": task.task_type, "result": _run_market_research(
+            task,
+            research_market=research_market,
+            model=model,
+        )}
     if task.task_type == "learning_priority":
         return {"task_type": task.task_type, "result": {
             "job_match": context.get("job_match"),
@@ -422,6 +788,7 @@ def _specialist_messages(task: ResearchTask, raw_result: dict[str, Any]) -> list
 ## 证据和输出规则
 {evidence_rules}
 - findings 只写关键观察；evidence 写支撑观察的输入来源；gaps 写证据或能力缺口；implications 写对求职准备的具体影响。
+- findings、evidence、gaps、implications 必须始终是 JSON 字符串数组；只有一条内容时也要写成 ["..."]，不能直接写字符串。
 - confidence 表示当前资料对本任务结论的支持程度，不表示用户的能力等级，也不表示录用概率。
 - 输出会交给 Report Writer。优先保留能帮助最终决策的少量高价值结论，避免重复输入全文。
 
@@ -477,8 +844,41 @@ def _report_messages(*, context: dict[str, Any], research_plan: ResearchPlan, ta
     ]
 
 
+def _build_specialist_subgraph(chat_model: Any):
+    """构建每个 Specialist 共用的独立子图入口。"""
+
+    def execute_specialist(state: SpecialistGraphState) -> dict[str, Any]:
+        return {
+            "raw_result": _execute_task(
+                state["task"],
+                context=state["context"],
+                research_market=state["research_market"],
+                model=state["model"],
+            )
+        }
+
+    def summarize_specialist(state: SpecialistGraphState) -> dict[str, Any]:
+        return {
+            "summary": _invoke_structured(
+                chat_model,
+                TaskSummary,
+                _specialist_messages(state["task"], state["raw_result"]),
+            )
+        }
+
+    graph = StateGraph(SpecialistGraphState)
+    graph.add_node("execute_specialist", execute_specialist)
+    graph.add_node("summarize_specialist", summarize_specialist)
+    graph.add_edge(START, "execute_specialist")
+    graph.add_edge("execute_specialist", "summarize_specialist")
+    graph.add_edge("summarize_specialist", END)
+    return graph.compile()
+
+
 def _build_planning_graph(chat_model: Any):
-    """构建 Planner -> Send 并行子 Agent -> Report Writer 的 LangGraph。"""
+    """构建 Planner -> Specialist 子图并行分发 -> Report Writer 的 LangGraph。"""
+
+    specialist_subgraph = _build_specialist_subgraph(chat_model)
 
     def plan_tasks(state: PlanningGraphState) -> dict[str, Any]:
         planned = _invoke_structured(chat_model, ResearchPlan, _planner_messages(
@@ -511,16 +911,13 @@ def _build_planning_graph(chat_model: Any):
 
     def run_specialist(state: dict[str, Any]) -> dict[str, Any]:
         task: ResearchTask = state["task"]
-        raw_result = _execute_task(
-            task,
-            context=state["context"],
-            research_market=state["research_market"],
-        )
-        summary = _invoke_structured(
-            chat_model,
-            TaskSummary,
-            _specialist_messages(task, raw_result),
-        )
+        specialist_result = specialist_subgraph.invoke({
+            "task": task,
+            "context": state["context"],
+            "research_market": state["research_market"],
+            "model": chat_model,
+        })
+        summary = specialist_result["summary"]
         # 子 Agent 只能决定内容，任务身份由 TODO 调度器统一校正。
         summary = summary.model_copy(update={
             "task_id": task.task_id,

@@ -24,6 +24,7 @@ export type PlanningResult = {
   evidence_limits: string[]
 }
 export type PlanningHistoryItem = { id: number; targetRole: string; jobDescription: string; weeks: number; hoursPerWeek: number; researchMarket: boolean; createdAt: string; updatedAt: string }
+export type DocumentItem = { id: number; originalFilename: string; mediaType: string; fileExtension: string; fileSize: number; sha256: string; status: string; failureReason?: string; createdAt: string; updatedAt: string }
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
   return requestJson<LoginResponse>('/api/auth/login', { method: 'POST', body: { username, password } })
@@ -95,3 +96,7 @@ export async function getPlanningHistory(accessToken: string, signal?: AbortSign
 export async function getPlanningResult(accessToken: string, planId: number, signal?: AbortSignal): Promise<PlanningResult> {
   return requestJson<PlanningResult>(`/api/agents/PlexusAgent/plans/${planId}`, { token: accessToken, signal })
 }
+export async function getDocuments(accessToken: string, signal?: AbortSignal): Promise<DocumentItem[]> { return requestJson<DocumentItem[]>('/api/documents', { token: accessToken, signal }) }
+export async function uploadDocument(accessToken: string, file: File): Promise<DocumentItem> { const data = new FormData(); data.append('file', file); const response = await fetch('/api/documents', { method: 'POST', headers: { Authorization: `Bearer ${accessToken}` }, body: data }); if (!response.ok) throw new Error(await response.text()); return await response.json() as DocumentItem }
+export async function deleteDocument(accessToken: string, id: number): Promise<void> { await requestJson<void>(`/api/documents/${id}`, { method: 'DELETE', token: accessToken }) }
+export async function reindexDocument(accessToken: string, id: number): Promise<DocumentItem> { return requestJson<DocumentItem>(`/api/documents/${id}/reindex`, { method: 'POST', token: accessToken }) }

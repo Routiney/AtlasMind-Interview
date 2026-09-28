@@ -53,6 +53,9 @@ class AgentHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_POST(self) -> None:  # noqa: N802 - 由 http.server 要求使用此名称
+        if self.path == "/documents/review":
+            self._do_document_review()
+            return
         if self.path == "/agents/PlexusAgent/plan":
             self._do_plan()
             return
@@ -70,6 +73,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         target_job = request.get("target_job")
         history = request.get("history") or []
         memory = request.get("memory") or {}
+        knowledge_context = request.get("knowledge_context") or []
         session_id = request.get("session_id")
         conversation_id = request.get("conversation_id")
         deep_thinking = request.get("deep_thinking") is True
@@ -124,6 +128,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                 target_job=target_job,
                 history=history,
                 memory=memory,
+                knowledge_context=knowledge_context,
                 deep_thinking=deep_thinking,
                 model=model,
             ):
@@ -216,6 +221,41 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._write_json(502, {"code": "MEMORY_WORKFLOW_ERROR", "message": "会话记忆整理失败。"})
             return
         self._write_json(200, update or {"summary": "", "facts": []})
+
+    def _do_document_review(self) -> None:
+        """审核疑似乱码文本，只允许模型做保守的格式和字符修复。"""
+        length = int(self.headers.get("Content-Length", "0"))
+        request = json.loads(self.rfile.read(length) or b"{}")
+        text = str(request.get("text", "")).strip()
+        if not text:
+            self._write_json(400, {"code": "EMPTY_DOCUMENT_TEXT", "message": "text is required"})
+            return
+        try:
+            model = create_chat_model()
+            prompt = f"""你是文档质量审核器。请修复文本中确定的乱码、异常空格和明显断行。禁止补写原文没有的事实、数字、专有名词或技术内容；无法确认的字符保持原样并写入 warnings。只返回 JSON，不要 Markdown：
+{{"normalized_text":"...","warnings":["..."],"confidence":0.0}}
+
+原始文本：
+<document>
+{text[:120000]}
+</document>"""
+            response = model.invoke(prompt)
+            content = getattr(response, "content", "")
+            if not isinstance(content, str):
+                content = str(content)
+            start, end = content.find("{"), content.rfind("}")
+            if start < 0 or end <= start:
+                raise ValueError("review response is not JSON")
+            result = json.loads(content[start:end + 1])
+            normalized = result.get("normalized_text")
+            if not isinstance(normalized, str) or not normalized.strip():
+                raise ValueError("normalized_text is missing")
+            self._write_json(200, {"normalized_text": normalized.strip(), "warnings": result.get("warnings") or [], "confidence": result.get("confidence", 0.0)})
+        except ModelConfigurationError as exc:
+            self._write_json(503, {"code": "MODEL_CONFIGURATION_ERROR", "message": str(exc)})
+        except Exception as exc:
+            print(f"[core] document review failed: {exc}")
+            self._write_json(502, {"code": "DOCUMENT_REVIEW_ERROR", "message": "文档审核失败。"})
 
     def _write_json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

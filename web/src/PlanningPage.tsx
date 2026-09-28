@@ -162,8 +162,48 @@ export function PlanningPage({ accessToken }: { accessToken: string }) {
 function PlanningResultView({ result }: { result: PlanningResult }) {
   const assessment = result.assessment
   const plan = result.learning_plan
+  const primaryRole = assessment.role_recommendations[0]
+  const primaryStrength = assessment.strengths[0]
+  const primaryGap = assessment.gaps[0]
+  const firstAction = assessment.next_actions[0] || plan.phases[0]?.objective || '先完成第一阶段的验证产出。'
+  const firstLimit = result.evidence_limits[0] || assessment.evidence_limits[0] || '当前结论会随着岗位描述和项目细节补充而调整。'
   return <div className="planning-result">
-    <section className="planning-overview"><div><span className="section-kicker">REPORT WRITER / 总结</span><h2>{presentText(assessment.overall_assessment)}</h2><p>{presentText(plan.rationale)}</p></div><div className="overview-stats"><div><strong>{result.research_plan.tasks.length}</strong><span>研究任务</span></div><div><strong>{plan.duration_weeks}</strong><span>周计划</span></div><div><strong>{plan.hours_per_week}</strong><span>小时 / 周</span></div></div></section>
+    <section className="planning-overview report-summary">
+      <div className="summary-heading">
+        <span className="section-kicker">REPORT WRITER / 执行摘要</span>
+        <h2>职业定位与行动摘要</h2>
+        <p className="summary-lead">{presentText(assessment.overall_assessment)}</p>
+        <p className="summary-rationale">{presentText(plan.rationale)}</p>
+      </div>
+      <div className="overview-stats" aria-label="规划概览">
+        <div><strong>{result.research_plan.tasks.length}</strong><span>研究任务</span></div>
+        <div><strong>{plan.duration_weeks}</strong><span>周计划</span></div>
+        <div><strong>{plan.hours_per_week}</strong><span>小时 / 周</span></div>
+      </div>
+      <div className="summary-grid">
+        <article className="summary-card summary-card-role">
+          <span className="summary-card-label">建议定位</span>
+          <h3>{presentText(primaryRole?.role || plan.target_role || '目标岗位方向待确认')}</h3>
+          <p>{presentText(primaryRole?.reason || '当前资料还不足以形成明确的岗位方向判断。')}</p>
+        </article>
+        <article className="summary-card">
+          <span className="summary-card-label">已有优势</span>
+          <h3>{presentText(primaryStrength?.area || '优势待补充')}</h3>
+          <p>{presentText(primaryStrength?.conclusion || '需要更多项目或实习证据来确认优势。')}</p>
+          <small>{presentText(primaryStrength?.evidence.join(' · ') || '暂无明确证据')}</small>
+        </article>
+        <article className="summary-card summary-card-gap">
+          <span className="summary-card-label">首要缺口</span>
+          <h3>{presentText(primaryGap?.area || '缺口待确认')}</h3>
+          <p>{presentText(primaryGap?.conclusion || '先通过第一阶段任务补充可验证证据。')}</p>
+          <small>{presentText(primaryGap?.evidence.join(' · ') || '建议通过项目或练习验证')}</small>
+        </article>
+      </div>
+      <div className="summary-decision-row">
+        <div><span className="summary-card-label">本周先做什么</span><p>{presentText(firstAction)}</p></div>
+        <div><span className="summary-card-label">结论边界</span><p>{presentText(firstLimit)}</p></div>
+      </div>
+    </section>
     <section className="planning-section"><div className="section-heading"><div><span className="section-kicker">PLANNER / 任务拆解</span><h2>这份结论是怎么来的</h2></div><span>{result.task_summaries.length} 项摘要</span></div><div className="task-grid">{result.research_plan.tasks.map((task, index) => { const summary = result.task_summaries.find(item => item.task_id === task.task_id); return <article className="task-item" key={task.task_id}><div className="task-number">0{index + 1}</div><div><h3>{presentText(task.title)}</h3><p>{presentText(task.intent)}</p>{summary && <><List items={summary.findings} /><div className="task-meta"><Confidence value={summary.confidence} /><span>{summary.evidence.length} 条证据</span>{summary.agent_name && <span>{summary.agent_name}</span>}</div></>}</div></article> })}</div></section>
     <section className="planning-columns"><div className="planning-section"><div className="section-heading"><div><span className="section-kicker">ASSESSMENT / 优势</span><h2>可以继续放大的能力</h2></div></div><div className="assessment-list">{assessment.strengths.map((item, index) => <article className="assessment-item" key={`${item.area}-${index}`}><div><strong>{presentText(item.area)}</strong><Confidence value={item.confidence} /></div><p>{presentText(item.conclusion)}</p><small>{presentText(item.evidence.join(' · ') || '未标注具体证据')}</small></article>)}</div>{!assessment.strengths.length && <p className="empty-line">暂未识别出有足够证据的优势</p>}</div><div className="planning-section"><div className="section-heading"><div><span className="section-kicker">ASSESSMENT / 缺口</span><h2>优先补齐的证据</h2></div></div><div className="assessment-list">{assessment.gaps.map((item, index) => <article className="assessment-item gap-item" key={`${item.area}-${index}`}><div><strong>{presentText(item.area)}</strong><Confidence value={item.confidence} /></div><p>{presentText(item.conclusion)}</p><small>{presentText(item.evidence.join(' · ') || '建议通过项目或练习验证')}</small></article>)}</div>{!assessment.gaps.length && <p className="empty-line">暂未识别出明确缺口</p>}</div></section>
     <section className="planning-section"><div className="section-heading"><div><span className="section-kicker">ROLE FIT / 方向</span><h2>适合优先验证的岗位方向</h2></div></div><div className="role-list">{assessment.role_recommendations.map((role, index) => <article className="role-item" key={`${role.role}-${index}`}><div className="role-title"><span>0{index + 1}</span><strong>{presentText(role.role)}</strong></div><p>{presentText(role.reason)}</p><div className="role-tags">{role.strengths.map(item => <span className="tag positive" key={item}>{presentText(item)}</span>)}{role.gaps.map(item => <span className="tag gap" key={item}>补 {presentText(item)}</span>)}</div></article>)}</div>{!assessment.role_recommendations.length && <p className="empty-line">暂未形成明确岗位方向</p>}</section>

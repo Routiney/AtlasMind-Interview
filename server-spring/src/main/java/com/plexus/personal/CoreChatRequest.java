@@ -12,7 +12,8 @@ public record CoreChatRequest(
         @JsonProperty("resume_profile") Map<String, String> resumeProfile,
         @JsonProperty("deep_thinking") boolean deepThinking,
         List<HistoryMessage> history,
-        Map<String, Object> memory
+        Map<String, Object> memory,
+        @JsonProperty("knowledge_context") List<Map<String, Object>> knowledgeContext
 ) {
     public record HistoryMessage(String role, String content) {}
 }

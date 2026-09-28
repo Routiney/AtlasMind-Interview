@@ -73,6 +73,7 @@ def stream_agent_events(
     target_job: Any = None,
     history: Sequence[Mapping[str, Any]] = (),
     memory: Mapping[str, Any] | None = None,
+    knowledge_context: Sequence[Mapping[str, Any]] = (),
     deep_thinking: bool = False,
     model: Any = None,
 ) -> Iterator[tuple[str, dict[str, Any]]]:
@@ -83,6 +84,7 @@ def stream_agent_events(
         target_job=target_job,
         history=history,
         memory=memory,
+        knowledge_context=knowledge_context,
     )
     agent = create_interview_agent(model)
     emitted_tools: set[str] = set()

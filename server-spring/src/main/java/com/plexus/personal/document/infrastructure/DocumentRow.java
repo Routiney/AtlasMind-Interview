@@ -1,0 +1,3 @@
+package com.plexus.personal.document.infrastructure;
+import com.plexus.personal.document.domain.*; import java.time.OffsetDateTime;
+public class DocumentRow { public Long id,userId; public String originalFilename,storageKey,mediaType,fileExtension,sha256,status,failureReason,rawText,normalizedText,qualityStatus,reviewResult; public Double qualityScore; public long fileSize; public OffsetDateTime createdAt,updatedAt; public Document toDomain(){return new Document(id,userId,originalFilename,storageKey,mediaType,fileExtension,fileSize,sha256,DocumentStatus.valueOf(status),failureReason,createdAt,updatedAt);} }

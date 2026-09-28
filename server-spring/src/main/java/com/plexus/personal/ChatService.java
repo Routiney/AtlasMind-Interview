@@ -11,6 +11,7 @@ import com.plexus.personal.conversation.domain.model.Message;
 import com.plexus.personal.conversation.domain.model.MessageRole;
 import com.plexus.personal.resume.application.ResumeProfileService;
 import com.plexus.personal.resume.domain.model.ResumeProfile;
+import com.plexus.personal.document.application.KnowledgeSearchService;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DefaultDataBufferFactory;
 import org.springframework.stereotype.Service;
@@ -39,6 +40,7 @@ public class ChatService {
     private final ObjectMapper objectMapper;
     private final ConcurrentHashMap<Long, ReentrantLock> conversationLocks = new ConcurrentHashMap<>();
     private final int contextTokenBudget;
+    private final KnowledgeSearchService knowledgeSearchService;
 
     public ChatService(
             ConversationService conversationService,
@@ -47,6 +49,7 @@ public class ChatService {
             ConversationMemoryService conversationMemoryService,
             ConversationMemoryRefreshService memoryRefreshService,
             ObjectMapper objectMapper,
+            KnowledgeSearchService knowledgeSearchService,
             @org.springframework.beans.factory.annotation.Value("${plexus.chat.context-token-budget:6000}") int contextTokenBudget
     ) {
         this.conversationService = conversationService;
@@ -54,6 +57,7 @@ public class ChatService {
         this.resumeProfileService = resumeProfileService;
         this.conversationMemoryService = conversationMemoryService;
         this.memoryRefreshService = memoryRefreshService;
+        this.knowledgeSearchService = knowledgeSearchService;
         this.objectMapper = objectMapper;
         this.contextTokenBudget = contextTokenBudget;
     }
@@ -74,12 +78,13 @@ public class ChatService {
                 Map<String, String> resumeProfile = request.includeResume()
                         ? resumeProfileService.findByUserId(userId).map(this::toResumeContext).orElse(null)
                         : null;
+                List<Map<String, Object>> knowledge = knowledgeSearchService.search(userId, request.query(), 5);
                 CoreChatRequest coreRequest = new CoreChatRequest(
                         request.query(), request.sessionId(), conversation.id(), request.stream(), resumeProfile,
                         request.deepThinking(), history.stream()
                                 .map(message -> new CoreChatRequest.HistoryMessage(message.role().name(), message.content()))
                                 .toList(),
-                        Map.of("summary", conversationMemory.summary(), "facts", conversationMemory.facts())
+                        Map.of("summary", conversationMemory.summary(), "facts", conversationMemory.facts()), knowledge
                 );
                 FinalEventCapture capture = new FinalEventCapture();
                 AtomicBoolean assistantSaved = new AtomicBoolean();

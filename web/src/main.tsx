@@ -8,6 +8,7 @@ import { clearConversationMemory, createConversation as createConversationApi, d
 import './style.css'
 import { ResumePage } from './ResumePage'
 import { PlanningPage } from './PlanningPage'
+import KnowledgePage from './KnowledgePage'
 import { requestSse } from './apiClient'
 import { validateDisplayName, validatePassword, validateUsername } from './validation'
 
@@ -524,7 +525,7 @@ function WorkbenchPage({ children, pageTitle = '简历档案' }: { children?: Re
   return <main className={sidebarOpen ? 'app-shell' : 'app-shell sidebar-collapsed'}>
     <aside className="sidebar">
       <div className="sidebar-top"><Link className="brand" to="/workbench">ATLASMIND</Link><button className="icon-button" onClick={() => setSidebarOpen(open => !open)} aria-label={sidebarOpen ? '收起侧边栏' : '展开侧边栏'}>◀</button></div>
-      <nav className="sidebar-nav" aria-label="工作台导航"><p className="nav-section-title">工作区</p>{menu.map(item => <NavLink key={item.to} to={item.to} className={({ isActive }) => isActive ? 'side-item active' : 'side-item'}><span className="side-icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span>{item.to === '/jobs' && <small>NEW</small>}{item.to !== '/workbench' && item.to !== '/jobs' && <small>规划中</small>}</NavLink>)}</nav>
+      <nav className="sidebar-nav" aria-label="工作台导航"><p className="nav-section-title">工作区</p>{menu.map(item => <NavLink key={item.to} to={item.to} className={({ isActive }) => isActive ? 'side-item active' : 'side-item'}><span className="side-icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span>{(item.to === '/interview' || item.to === '/review') && <small>规划中</small>}</NavLink>)}</nav>
       <div className="sidebar-bottom"><div className="user-card"><span className="avatar">{currentUser?.username?.slice(0, 1).toUpperCase() || 'D'}</span><span className="user-copy"><strong>{currentUser?.username || 'dev-user'}</strong><small>个人空间</small></span><button className="more-button" onClick={() => { logout(); navigate('/login') }} aria-label="退出登录">⋯</button></div></div>
     </aside>
     <section className="main-workspace"><header className="workspace-header"><div><span className="workspace-kicker">PERSONAL INTERVIEW ASSISTANT</span><h1>{children ? pageTitle : '面试助手'}</h1></div><div className="header-actions"><span className="connection-state"><span className="connection-dot" />已连接</span><button className="header-icon" onClick={() => setSidebarOpen(open => !open)} aria-label="切换侧边栏">☰</button></div></header>{children ? <div className="workspace-content standalone-content">{children}</div> : <div className="workspace-body"><aside className="conversation-sidebar"><div className="conversation-heading"><span>会话</span><button className="conversation-add" disabled={creatingConversation} onClick={() => void createConversation()} aria-label="新建会话">{creatingConversation ? '…' : '＋'}</button></div>{conversationError && <div className="conversation-error"><span>{conversationError}</span><button type="button" onClick={() => void refreshConversations()}>重试</button></div>}{conversationLoading ? <div className="conversation-state"><span className="state-spinner" />加载中…</div> : conversations.length ? <div className="conversation-list">{conversations.map(item => { const busy = busyConversationIds.has(item.id); return <div key={item.id} className={item.id === activeConversationId ? 'conversation-item active' : 'conversation-item'}><button className="conversation-select" disabled={busy} onClick={() => selectConversation(item.id)}><span className="conversation-icon">◌</span><span>{item.title}</span></button><span className="conversation-actions"><button type="button" disabled={busy} title="重命名" onClick={() => void renameConversationById(item.id, item.title)}>✎</button><button type="button" disabled={busy} title="删除" onClick={() => void removeConversation(item.id)}>×</button></span></div> })}</div> : <div className="conversation-state">还没有会话</div>}</aside><div className="workspace-content"><div className="workspace-context"><span>当前对话</span><span className="context-line" /> <span className="context-muted">{conversations.find(item => item.id === activeConversationId)?.title || '选择一个会话'}</span></div><ChatDemo key={activeConversationId ?? 'empty'} loading={messagesLoading} hasEarlierMessages={hasEarlierMessages} onLoadEarlier={() => void loadEarlierMessages()} initialState={conversations.find(item => item.id === activeConversationId)} onTitleChange={renameConversation} onStateChange={saveConversationState} /></div></div>}</section>
@@ -543,6 +544,12 @@ function PlanningWorkbenchPage() {
   return <WorkbenchPage pageTitle="职业规划"><PlanningPage accessToken={authSession.accessToken} /></WorkbenchPage>
 }
 
+function KnowledgeWorkbenchPage() {
+  const { authSession } = useAuth()
+  if (!authSession) return null
+  return <WorkbenchPage pageTitle="知识库"><KnowledgePage accessToken={authSession.accessToken} /></WorkbenchPage>
+}
+
 function PlaceholderPage({ title, description }: { title: string; description: string }) {
   const { currentUser, authSession } = useAuth()
   if (title === '简历档案' && currentUser && authSession) return <ResumePage key={currentUser.username} username={currentUser.username} accessToken={authSession.accessToken} />
@@ -550,7 +557,7 @@ function PlaceholderPage({ title, description }: { title: string; description: s
 }
 
 function App() {
-  return <BrowserRouter><AuthProvider><Routes><Route path="/login" element={<AuthPage mode="login" />} /><Route path="/register" element={<AuthPage mode="register" />} /><Route element={<ProtectedRoute />}><Route path="/workbench" element={<WorkbenchPage />} /><Route path="/resume" element={<ResumeWorkbenchPage />} /><Route path="/jobs" element={<PlanningWorkbenchPage />} /><Route path="/knowledge" element={<PlaceholderPage title="知识库" description="沉淀面试知识和岗位资料，后续接入检索能力。" />} /><Route path="/interview" element={<PlaceholderPage title="模拟面试" description="从结构化问题开始，逐步接入 InterviewManagerAgent。" />} /><Route path="/review" element={<PlaceholderPage title="复盘记录" description="查看练习记录、回答证据和改进建议。" />} /></Route><Route path="/" element={<Navigate to="/workbench" replace />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></AuthProvider></BrowserRouter>
+  return <BrowserRouter><AuthProvider><Routes><Route path="/login" element={<AuthPage mode="login" />} /><Route path="/register" element={<AuthPage mode="register" />} /><Route element={<ProtectedRoute />}><Route path="/workbench" element={<WorkbenchPage />} /><Route path="/resume" element={<ResumeWorkbenchPage />} /><Route path="/jobs" element={<PlanningWorkbenchPage />} /><Route path="/knowledge" element={<KnowledgeWorkbenchPage />} /><Route path="/interview" element={<PlaceholderPage title="模拟面试" description="从结构化问题开始，逐步接入 InterviewManagerAgent。" />} /><Route path="/review" element={<PlaceholderPage title="复盘记录" description="查看练习记录、回答证据和改进建议。" />} /></Route><Route path="/" element={<Navigate to="/workbench" replace />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></AuthProvider></BrowserRouter>
 }
 
 createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>)

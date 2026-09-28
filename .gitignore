@@ -6,5 +6,7 @@ core/__pycache__/
 core/.env
 core/run*.log
 server-spring/run*.log
+server-spring/data/
+hs_err_pid*.log
 server/*.class
 tools/*.zip

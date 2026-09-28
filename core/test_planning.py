@@ -6,10 +6,12 @@ from unittest.mock import patch
 from planning_workflow import (
     CapabilityAssessment,
     LearningPlan,
+    MarketSourceReview,
     PlanningReport,
     ResearchPlan,
     ResearchTask,
     TaskSummary,
+    _build_market_research_graph,
     public_planning_result,
     run_planning_workflow,
 )
@@ -101,21 +103,65 @@ class FakeStructuredModel:
         return FakeStructuredRunnable(schema)
 
 
+class FakeMarketReviewModel:
+    def __init__(self):
+        self.review_calls = 0
+
+    def with_structured_output(self, schema, method):
+        model = self
+
+        class Runnable:
+            def invoke(self, messages):
+                if schema is not MarketSourceReview:
+                    raise AssertionError(f"unexpected schema: {schema}")
+                model.review_calls += 1
+                include = model.review_calls >= 2
+                return {
+                    "assessments": [{
+                        "index": 0,
+                        "relevance": "high",
+                        "credibility": "high",
+                        "include": include,
+                        "reason": "公开岗位研究来源可用于验证目标方向要求。",
+                    }],
+                    "accepted_indices": [0] if include else [],
+                    "overall_confidence": "high" if include else "low",
+                    "limitations": [] if include else ["首轮来源质量不足，准备改变检索角度。"],
+                }
+
+        return Runnable()
+
+
 class PlanningWorkflowTests(unittest.TestCase):
+    def test_task_summary_normalizes_single_text_fields(self):
+        summary = TaskSummary.model_validate({
+            "task_id": "resume-evidence",
+            "title": "简历证据盘点",
+            "findings": "项目中出现 Java 技术证据。",
+            "evidence": "项目经历",
+            "gaps": "缺少量化结果。",
+            "implications": "需要补充项目指标。",
+        })
+
+        self.assertEqual(summary.findings, ["项目中出现 Java 技术证据。"])
+        self.assertEqual(summary.evidence, ["项目经历"])
+        self.assertEqual(summary.gaps, ["缺少量化结果。"])
+        self.assertEqual(summary.implications, ["需要补充项目指标。"])
+
     def test_langgraph_runs_specialists_in_parallel(self):
         active = 0
         peak = 0
         lock = threading.Lock()
         original_execute_task = __import__("planning_workflow")._execute_task
 
-        def delayed_execute_task(task, *, context, research_market):
+        def delayed_execute_task(task, *, context, research_market, model=None):
             nonlocal active, peak
             with lock:
                 active += 1
                 peak = max(peak, active)
             time.sleep(0.03)
             try:
-                return original_execute_task(task, context=context, research_market=research_market)
+                return original_execute_task(task, context=context, research_market=research_market, model=model)
             finally:
                 with lock:
                     active -= 1
@@ -124,6 +170,79 @@ class PlanningWorkflowTests(unittest.TestCase):
             run_planning_workflow(resume_profile=PROFILE, model=FakeStructuredModel())
 
         self.assertGreaterEqual(peak, 2)
+
+    def test_market_research_subgraph_deduplicates_and_retries_after_source_rejection(self):
+        search_calls = []
+
+        class FakeSearchTool:
+            def invoke(self, query):
+                search_calls.append(query)
+                return {
+                    "query": query,
+                    "results": [
+                        {
+                            "title": "Java 后端工程师招聘",
+                            "url": "https://jobs.example.com/java?id=1&utm_source=test",
+                            "content": "负责 Java、Spring Boot 服务开发。",
+                        },
+                        {
+                            "title": "Java 后端工程师招聘",
+                            "url": "https://jobs.example.com/java?id=1&utm_medium=duplicate",
+                            "content": "负责 Java、Spring Boot 服务开发。",
+                        },
+                    ],
+                }
+
+        model = FakeMarketReviewModel()
+        task = ResearchTask(
+            task_id="market-research",
+            title="公开岗位信息研究",
+            intent="补充目标岗位公开招聘要求",
+            query="Java 后端工程师 招聘",
+            task_type="market_research",
+        )
+        with patch("planning_workflow.mcp_search_tool", FakeSearchTool()):
+            result = _build_market_research_graph(model).invoke({
+                "task": task,
+                "research_market": True,
+                "attempt": 0,
+                "max_attempts": 2,
+                "search_records": [],
+                "errors": [],
+            })
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["attempt"], 1)
+        self.assertEqual(model.review_calls, 2)
+        self.assertEqual(len(search_calls), 4)
+        self.assertEqual(len(result["accepted_results"]), 1)
+
+    def test_market_research_subgraph_reports_unavailable_after_failed_searches(self):
+        class FailedSearchTool:
+            def invoke(self, query):
+                raise RuntimeError("search unavailable")
+
+        task = ResearchTask(
+            task_id="market-research",
+            title="公开岗位信息研究",
+            intent="补充目标岗位公开招聘要求",
+            query="Java 后端工程师 招聘",
+            task_type="market_research",
+        )
+        with patch("planning_workflow.mcp_search_tool", FailedSearchTool()):
+            result = _build_market_research_graph(FakeMarketReviewModel()).invoke({
+                "task": task,
+                "research_market": True,
+                "attempt": 0,
+                "max_attempts": 2,
+                "search_records": [],
+                "errors": [],
+            })
+
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["attempt"], 1)
+        self.assertEqual(result.get("accepted_results"), [])
+        self.assertEqual(result["errors"], ["搜索失败：RuntimeError"] * 4)
 
     def test_workflow_runs_planner_summarizers_and_report_writer(self):
         model = FakeStructuredModel()

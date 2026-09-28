@@ -105,7 +105,7 @@ MCP Server 通过标准 `tools/list` 暴露工具名称、描述和输入 Schema
   -> 结构化 InterviewPlanningResult
 ```
 
-每个 TODO 都由专门的子 Agent 系统提示词负责：它们共享确定性工具结果，但关注点不同，不再由一个通用 Summarizer 串行处理所有任务。角色提示词在 `AgentPromptSpec` 中按“使命、工作步骤、证据规则、禁止事项”组织：简历证据 Agent 负责审计事实强度，岗位匹配 Agent 负责逐项对照，市场研究 Agent 负责约束外部来源，学习优先级 Agent 负责时间预算和验收产出，面试准备 Agent 负责真实经历的深挖主题。LangGraph 的并行分支使用按 `task_id` 合并的 reducer，最终报告阶段再按 Planner 的 TODO 顺序恢复展示顺序。Planner、专门子 Agent 和 Report Writer 都使用 `with_structured_output(..., method="function_calling")`，结果会经过 Pydantic schema 校验，不把自由文本直接当成研究任务、证据摘要或学习计划。模型提示词要求区分简历事实、合理推断和证据限制；信息不足时输出限制或澄清任务，不能自行补全。
+每个 TODO 都由专门的子 Agent 系统提示词负责：它们共享确定性工具结果，但关注点不同，不再由一个通用 Summarizer 串行处理所有任务。角色提示词在 `AgentPromptSpec` 中按“使命、工作步骤、证据规则、禁止事项”组织：简历证据 Agent 负责审计事实强度，岗位匹配 Agent 负责逐项对照，市场研究 Agent 负责约束外部来源，学习优先级 Agent 负责时间预算和验收产出，面试准备 Agent 负责真实经历的深挖主题。每个 Specialist 通过独立子图执行“执行器 -> 专门汇总器”；其中 Market Research Agent 还有自己的内部子图：准备多个公开检索词、并行搜索、过滤无效结果、规范化 URL 去重、调用 Source Evaluator 评估来源质量，并在没有有效来源时改变检索角度重试，最多执行两轮。搜索失败、来源全部被拒绝或评估模型不可用时，子图返回 `unavailable` 和失败原因，Report Writer 不会据此伪造市场结论。LangGraph 的并行分支使用按 `task_id` 合并的 reducer，最终报告阶段再按 Planner 的 TODO 顺序恢复展示顺序。Planner、专门子 Agent 和 Report Writer 都使用 `with_structured_output(..., method="function_calling")`，结果会经过 Pydantic schema 校验，不把自由文本直接当成研究任务、证据摘要或学习计划。模型提示词要求区分简历事实、合理推断和证据限制；信息不足时输出限制或澄清任务，不能自行补全。
 
 规划接口是 `POST /api/agents/PlexusAgent/plan`，Spring 根据当前 JWT 用户读取结构化简历，再代理到 Core 的 `POST /agents/PlexusAgent/plan`。请求可包含 `job_description`、`weeks`、`hours_per_week` 和 `research_market`。它返回 `research_plan`、`task_summaries`、`assessment`、`learning_plan` 和证据边界。工作台的“职业规划”页面展示这些结构化结果。
 
