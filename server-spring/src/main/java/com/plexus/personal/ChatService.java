@@ -124,7 +124,7 @@ public class ChatService {
     }
 
     private List<Message> contextWindow(Long userId, Long conversationId, ConversationMemory memory) {
-        List<Message> newestFirst = conversationService.findMessages(userId, conversationId, 1000, 0);
+        List<Message> newestFirst = conversationService.findMessagesForChatContext(userId, conversationId);
         List<Message> selected = new ArrayList<>();
         int used = estimateTokens(memory.summary()) + estimateTokens(memory.facts().toString());
         int budget = Math.max(500, contextTokenBudget);

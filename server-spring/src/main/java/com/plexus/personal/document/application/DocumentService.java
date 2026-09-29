@@ -3,6 +3,7 @@ package com.plexus.personal.document.application;
 import com.plexus.personal.document.domain.Document;
 import com.plexus.personal.document.infrastructure.DocumentMapper;
 import com.plexus.personal.document.infrastructure.DocumentRow;
+import com.plexus.personal.document.infrastructure.messaging.DocumentEventPublisher;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.multipart.FilePart;
@@ -34,15 +35,15 @@ public class DocumentService {
     );
 
     private final DocumentMapper mapper;
-    private final DocumentProcessingService processing;
+    private final DocumentEventPublisher events;
     private final Path root;
     private final long maxBytes;
 
-    public DocumentService(DocumentMapper mapper, DocumentProcessingService processing,
+    public DocumentService(DocumentMapper mapper, DocumentEventPublisher events,
                            @Value("${atlas.documents.root:./data/documents}") String root,
                            @Value("${atlas.documents.max-bytes:" + DEFAULT_MAX_BYTES + "}") long maxBytes) {
         this.mapper = mapper;
-        this.processing = processing;
+        this.events = events;
         this.root = Path.of(root).toAbsolutePath().normalize();
         this.maxBytes = maxBytes;
     }
@@ -105,7 +106,13 @@ public class DocumentService {
             row.status = "PENDING";
             mapper.insert(row);
             Document document = row.toDomain();
-            processing.process(document, target);
+            try {
+                events.publishUploaded(document);
+                events.publishParseRequested(document);
+            } catch (RuntimeException publishFailure) {
+                mapper.updateStatus(document.id(), userId, "FAILED", "文档任务发布失败: " + publishFailure.getMessage());
+                throw publishFailure;
+            }
             return find(document.id(), userId);
         } catch (Exception error) {
             if (moved) deleteQuietly(target);
@@ -136,8 +143,20 @@ public class DocumentService {
     }
 
     public void reindex(Long id, Long userId) {
-        Document document = find(id, userId);
-        processing.process(document, root.resolve(document.storageKey()).normalize());
+        mapper.updateStatus(id, userId, "PENDING", null);
+        Document pending = find(id, userId);
+        try {
+            events.publishParseRequested(pending);
+        } catch (RuntimeException publishFailure) {
+            mapper.updateStatus(id, userId, "FAILED", "文档任务发布失败: " + publishFailure.getMessage());
+            throw publishFailure;
+        }
+    }
+
+    public Path storagePath(Document document) {
+        Path path = root.resolve(document.storageKey()).normalize();
+        if (!path.startsWith(root)) throw new IllegalArgumentException("非法文档路径");
+        return path;
     }
 
     public void delete(Long id, Long userId) {

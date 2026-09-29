@@ -175,3 +175,5 @@ mvn -B -DskipTests package
 项目的架构拆解、环境配置、认证实现、前端工作台、Agent 和知识库实现过程记录在 [`doc/`](doc/) 目录中。代码以可运行的面试辅助系统为主，课程笔记用于解释各模块的设计取舍和验收过程。
 
 下一阶段课程计划见 [`doc/07-redis-kafka-course-plan.md`](doc/07-redis-kafka-course-plan.md)，将以文档处理和面试训练事件为主线学习 Redis、Kafka、消费幂等和任务进度管理。
+
+Redis 会话缓存与 Kafka 文档异步处理的实现和验收记录见 [`doc/08-redis-kafka-implementation-notes.md`](doc/08-redis-kafka-implementation-notes.md)。

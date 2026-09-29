@@ -4,6 +4,8 @@ import com.plexus.personal.conversation.domain.model.Conversation;
 import com.plexus.personal.conversation.domain.model.Message;
 import com.plexus.personal.conversation.domain.repository.ConversationRepository;
 import com.plexus.personal.conversation.domain.repository.MessageRepository;
+import com.plexus.personal.conversation.infrastructure.cache.RedisConversationMemoryCache;
+import com.plexus.personal.conversation.infrastructure.cache.RedisConversationHistoryCache;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -13,13 +15,19 @@ public class ConversationService {
 
     private final ConversationRepository conversationRepository;
     private final MessageRepository messageRepository;
+    private final RedisConversationMemoryCache memoryCache;
+    private final RedisConversationHistoryCache historyCache;
 
     public ConversationService(
             ConversationRepository conversationRepository,
-            MessageRepository messageRepository
+            MessageRepository messageRepository,
+            RedisConversationMemoryCache memoryCache,
+            RedisConversationHistoryCache historyCache
     ) {
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
+        this.memoryCache = memoryCache;
+        this.historyCache = historyCache;
     }
 
     public Conversation create(Long userId, String title) {
@@ -38,11 +46,27 @@ public class ConversationService {
     public void delete(Long userId, Long conversationId) {
         requireOwnedConversation(userId, conversationId);
         conversationRepository.delete(conversationId);
+        memoryCache.evict(userId, conversationId);
+        historyCache.evict(userId, conversationId);
     }
 
     public List<Message> findMessages(Long userId, Long conversationId, int limit, int offset) {
         requireOwnedConversation(userId, conversationId);
         return messageRepository.findByConversationId(conversationId, limit, offset);
+    }
+
+    /**
+     * History path used by ChatService. It avoids a PostgreSQL read after the Redis
+     * list has been warmed, while the normal paginated API keeps using SQL.
+     */
+    public List<Message> findMessagesForChatContext(Long userId, Long conversationId) {
+        requireOwnedConversation(userId, conversationId);
+        return historyCache.get(userId, conversationId)
+                .orElseGet(() -> {
+                    List<Message> messages = messageRepository.findByConversationId(conversationId, 1000, 0);
+                    historyCache.replace(userId, conversationId, messages);
+                    return messages;
+                });
     }
 
     public List<Message> findMessagesAfter(Long userId, Long conversationId, long messageId, int limit) {
@@ -61,7 +85,9 @@ public class ConversationService {
                                  com.plexus.personal.conversation.domain.model.MessageRole role,
                                  String content) {
         requireOwnedConversation(userId, conversationId);
-        return messageRepository.append(conversationId, role, content);
+        Message message = messageRepository.append(conversationId, role, content);
+        historyCache.prepend(userId, conversationId, message);
+        return message;
     }
 
     public Conversation requireOwnedConversation(Long userId, Long conversationId) {
